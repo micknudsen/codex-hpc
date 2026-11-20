@@ -308,7 +308,8 @@ class CredentialStore:
     @staticmethod
     def read(path):
         try:
-            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            # Validate the descriptor before reading; a FIFO must not block exit.
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         except FileNotFoundError:
             return None
         with os.fdopen(descriptor, "rb") as stream:

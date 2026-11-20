@@ -193,6 +193,26 @@ if os.environ.get("PAUSE_PERSIST"):
         self.assertIn("credential directory", result.stderr)
         self.assertEqual(list(self.workspace.iterdir()), [])
 
+    def test_nonregular_auth_cannot_block_session_cleanup(self):
+        self.codex('os.mkfifo(auth)\n')
+        process = subprocess.Popen(self.connect_command(), env=self.env, cwd=self.root,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   text=True, start_new_session=True)
+        try:
+            try:
+                stdout, stderr = process.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                self.fail("non-regular auth document blocked session cleanup")
+            self.assertNotEqual(process.returncode, 0)
+            self.assertIn("regular file", stderr)
+            self.assertNotIn("Traceback", stderr)
+            self.assertEqual(list(Path(self.env["NODE_TMP"]).iterdir()), [])
+            self.assertEqual(json.loads(Path(self.env["JOBS"]).read_text()), {"777": "unrelated-job"})
+        finally:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGTERM)
+                process.communicate(timeout=10)
+
     def test_node_state_alias_and_workspace_settings_cannot_redirect_credentials(self):
         self.codex('''assert '--config=cli_auth_credentials_store="file"' in sys.argv
 auth.write_text(''' + repr(json.dumps(self.auth)) + ''')
