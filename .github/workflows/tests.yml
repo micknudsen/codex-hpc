@@ -16,7 +16,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # Pin Ubuntu to a runner with published Python 3.9 binaries.
+        os: [ubuntu-24.04, macos-latest]
         python: ['3.9', '3.14']
     steps:
       - uses: actions/checkout@v4

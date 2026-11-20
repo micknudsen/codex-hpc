@@ -62,4 +62,4 @@ the checkout. A controlled SSH executable runs the packaged discovery script in
 a separate process with its own remote `HOME` and XDG environment. Tests cover
 argument errors, independent precedence, literal paths and observable failures.
 They do not claim real-cluster or real-SSH qualification. CI runs the same suite
-on Linux and macOS with Python 3.9 and 3.14 for PRs and after merge to `master`.
+on Ubuntu 24.04 and macOS with Python 3.9 and 3.14 for PRs and after merge to `master`.
