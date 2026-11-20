@@ -1,0 +1,34 @@
+{
+  "architecture": "linux/amd64",
+  "base": {
+    "name": "docker.io/library/buildpack-deps",
+    "version": "bookworm-scm",
+    "sha256": "43871fe79d288129dd83926d17113fc25c44a1ef5aef1244cea470c2cf7457a7"
+  },
+  "codex": {
+    "version": "0.170.0",
+    "url": "https://github.com/openai/codex/releases/download/rust-v0.170.0/codex-x86_64-unknown-linux-musl.tar.gz",
+    "sha256": "d054916ccd28a53820376b8d2f7c875184ca8f40fcd44bbabeb8ee240ce247f5",
+    "member": "codex-x86_64-unknown-linux-musl"
+  },
+  "ripgrep": {
+    "version": "15.1.0",
+    "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/ripgrep-15.1.0-x86_64-unknown-linux-musl.tar.gz",
+    "sha256": "1c9297be4a084eea7ecaedf93eb03d058d6faae29bbc57ecdaf5063921491599",
+    "member": "ripgrep-15.1.0-x86_64-unknown-linux-musl/rg"
+  },
+  "build_tools": {
+    "apptainer": "1.5.5",
+    "apptainer_deb_url": "https://github.com/apptainer/apptainer/releases/download/v1.5.5/apptainer_1.5.5_amd64.deb",
+    "apptainer_deb_sha256": "25095d3711504b3e8657dbb2e172ef8db9db43c4503d940c9c36b105db8dce77",
+    "python": "3.12.3",
+    "squashfs_tools": "4.6.1"
+  },
+  "build_packages": {
+    "uidmap": "1:4.13+dfsg1-4ubuntu3.2",
+    "libsubid4": "1:4.13+dfsg1-4ubuntu3.2",
+    "fakeroot": "1.33-1",
+    "libfakeroot": "1.33-1"
+  },
+  "build_arguments": ["build", "--fakeroot", "--disable-cache", "--mksquashfs-args", "-processors 2"]
+}

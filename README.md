@@ -4,6 +4,8 @@ The first release targets interactive Codex sessions in a single workspace on a 
 
 See [Contributing](.github/CONTRIBUTING.md) for the protected PR workflow and the project skills for implementing issues and preparing releases.
 
+Maintainers can [build and qualify a signed image candidate](docs/build-image.md) with recorded inputs and a matching client/helper package. Candidate creation does not publish a release.
+
 ## Development client
 
 The client currently resolves SSH destinations and remote storage for `setup` and

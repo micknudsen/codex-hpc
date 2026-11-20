@@ -1,0 +1,21 @@
+Bootstrap: docker
+From: {{BASE}}
+
+%files
+    codex /usr/local/bin/codex
+    rg /usr/local/bin/rg
+    probe.sh /usr/local/bin/codex-hpc-probe
+
+%post
+    chmod 755 /usr/local/bin/codex /usr/local/bin/rg /usr/local/bin/codex-hpc-probe
+    mkdir -p /workspace
+
+%environment
+    export PATH=/usr/local/bin:/usr/bin:/bin
+
+%runscript
+    exec /usr/local/bin/codex "$@"
+
+%labels
+    org.codex-hpc.interface 1
+    org.codex-hpc.architecture linux/amd64
