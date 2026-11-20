@@ -71,21 +71,28 @@ def main():
     for name, path in roots.items():
         print(name + " root: " + path)
     bundle = files("codex_hpc").joinpath("release")
-    if args.command == "setup" and bundle.joinpath("release.json").is_file():
+    if bundle.joinpath("release.json").is_file():
         try:
             helper = bundle.joinpath("helper.py").read_text(encoding="utf-8")
             payload = {"roots": roots, "release": json.loads(bundle.joinpath("release.json").read_text()),
                        "key": bundle.joinpath("trusted.pem").read_text(encoding="utf-8"),
                        "helper": helper}
-            command = "python3 - --setup " + shlex.quote(json.dumps(payload))
+            if args.command == "connect":
+                payload["workspace"] = args.workspace
+                recovery = ["codex-hpc", "setup", "--host", args.host]
+                for name, path in roots.items():
+                    recovery.extend(["--" + name + "-root", path])
+                payload["setup_command"] = shlex.join(recovery)
+            operation = "setup" if args.command == "setup" else "preflight"
+            command = "python3 - --" + operation + " " + shlex.quote(json.dumps(payload))
             return subprocess.run(
                 ssh_arguments(args.host, command),
                 input=helper, text=True).returncode
         except (OSError, ValueError) as error:
-            print("codex-hpc: setup failed: " + str(error), file=sys.stderr)
+            print("codex-hpc: " + args.command + " failed: " + str(error), file=sys.stderr)
             return 1
         except KeyboardInterrupt:
-            print("codex-hpc: setup interrupted; rerun setup to retry.", file=sys.stderr)
+            print("codex-hpc: " + args.command + " interrupted; rerun to retry.", file=sys.stderr)
             return 130
     print("codex-hpc: remote release not installed; this development client only discovers storage.",
           file=sys.stderr)

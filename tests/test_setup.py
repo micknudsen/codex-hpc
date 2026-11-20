@@ -20,7 +20,7 @@ def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-class SetupCLI(unittest.TestCase):
+class RemoteCLI(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.install = tempfile.TemporaryDirectory(prefix="codex-hpc-setup-install-")
@@ -136,6 +136,13 @@ raise SystemExit(0 if key == "fixture trusted public key" else 1)
     def cache(self):
         return self.home / ".cache/codex-hpc"
 
+
+    def snapshot(self):
+        current = self.data / "current"
+        return os.readlink(current), {path.name: path.read_bytes() for path in current.iterdir()}
+
+
+class SetupCLI(RemoteCLI):
     def test_cold_install_and_verified_warm_repeat(self):
         result = self.setup()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -167,10 +174,6 @@ exec(compile(sys.stdin.read(), "<remote>", "exec"))
         self.assertIn("space", result.stderr)
         self.assertEqual(self.events(), [])
         self.assertFalse((self.data / "current").exists())
-
-    def snapshot(self):
-        current = self.data / "current"
-        return os.readlink(current), {path.name: path.read_bytes() for path in current.iterdir()}
 
     def test_failed_downloads_preserve_active_release_and_unrelated_state(self):
         self.assertEqual(self.setup().returncode, 0)

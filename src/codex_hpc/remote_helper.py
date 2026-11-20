@@ -52,8 +52,20 @@ def staging(parent, prefix):
         yield directory
 
 
-def prepare_image(images, release, key):
-    image = images / (release["image"]["sha256"] + ".sif")
+def image_location(cache, release):
+    metadata = release["image"]
+    return cache / "images" / metadata["architecture"].replace("/", "-") / (metadata["sha256"] + ".sif")
+
+
+def installation_identity(release, image):
+    encoded = json.dumps(release, sort_keys=True)
+    installation = json.dumps({"image": str(image)})
+    identity = hashlib.sha256((encoded + installation).encode()).hexdigest()
+    return encoded, installation, identity
+
+
+def prepare_image(image, release, key):
+    images = image.parent
     if image.exists():
         verify(image, release, key)
         return image
@@ -98,7 +110,8 @@ def setup(payload):
         releases = roots["data"] / "releases"
         releases.mkdir(exist_ok=True)
         recover_staging(releases, ".setup-")
-        images = roots["cache"] / "images" / image_metadata["architecture"].replace("/", "-")
+        image = image_location(roots["cache"], release)
+        images = image.parent
         images.mkdir(parents=True, exist_ok=True)
         recover_staging(images, ".download-")
         for name, root in roots.items():
@@ -109,7 +122,7 @@ def setup(payload):
                 raise ValueError(name + " root is not writable: " + str(root) + ": " + str(error))
         if shutil.disk_usage(releases).free < 1024 * 1024:
             raise ValueError("insufficient free space for release staging at " + str(releases))
-        encoded = json.dumps(release, sort_keys=True)
+        encoded, installation, identity = installation_identity(release, image)
         with staging(releases, ".setup-") as stage:
             key = stage / "trusted.pem"
             key.write_text(payload["key"])
@@ -117,11 +130,9 @@ def setup(payload):
             helper.write_text(payload["helper"])
             if digest(key) != release["trust"]["sha256"] or digest(helper) != release["helper_sha256"]:
                 raise ValueError("bundled helper or public key checksum mismatch")
-            image = prepare_image(images, release, key)
+            prepare_image(image, release, key)
             (stage / "release.json").write_text(encoded)
-            installation = json.dumps({"image": str(image)})
             (stage / "installation.json").write_text(installation)
-            identity = hashlib.sha256((encoded + installation).encode()).hexdigest()
             target = releases / identity
             if target.exists():
                 expected_files = ("helper.py", "trusted.pem", "release.json", "installation.json")
@@ -147,26 +158,101 @@ def setup(payload):
     print("Release " + release["version"] + " ready at " + str(target))
 
 
+def contains(directory, path):
+    return directory == path or directory in path.parents
+
+
+def check_workspace_isolation(workspace, roots):
+    temporary_root = Path(tempfile.gettempdir()).resolve()
+    pending = [workspace]
+    visited = set()
+    while pending:
+        path = pending.pop()
+        try:
+            resolved = path.resolve()
+            for name, root in roots.items():
+                if contains(resolved, root) or contains(root, resolved):
+                    raise ValueError("unsafe workspace: " + str(path) + " exposes " +
+                                     name + " root " + str(root))
+            if contains(resolved, temporary_root):
+                raise ValueError("unsafe workspace: " + str(path) + " contains temporary root " +
+                                 str(temporary_root))
+            if resolved in visited or not resolved.is_dir():
+                continue
+            visited.add(resolved)
+            pending.extend(resolved.iterdir())
+        except (OSError, RuntimeError) as error:
+            raise ValueError("cannot check workspace isolation at " + str(path) + ": " + str(error))
+
+
+def preflight(payload):
+    os.umask(0o077)
+    selected = payload["workspace"]
+    if (not selected.startswith(("/", "~/")) or
+            any(ord(char) < 32 or ord(char) == 127 for char in selected)):
+        raise ValueError("workspace must be an absolute POSIX path or a quoted '~/project'; "
+                         "control characters are unsupported")
+    if selected.startswith("~/"):
+        selected = os.environ["HOME"].rstrip("/") + "/" + selected[2:]
+    try:
+        workspace = Path(selected).resolve(strict=True)
+        if not workspace.is_dir():
+            raise ValueError("workspace is not a directory: " + str(workspace))
+    except (OSError, RuntimeError) as error:
+        raise ValueError("workspace must be an existing directory: " + selected + ": " + str(error))
+    print("Workspace: " + str(workspace), flush=True)
+    roots = {name: Path(path).resolve() for name, path in payload["roots"].items()}
+    release = payload["release"]
+    image = image_location(roots["cache"], release)
+    encoded, installation, identity = installation_identity(release, image)
+    target = roots["data"] / "releases" / identity
+    protected = dict(roots)
+    for name, path in (("helper", target), ("image", image)):
+        try:
+            protected[name] = path.resolve()
+        except (OSError, RuntimeError) as error:
+            raise ValueError("matching release is not ready; cannot resolve " + name + " " +
+                             str(path) + ": " + str(error) + "\nRun: " + payload["setup_command"])
+    check_workspace_isolation(workspace, protected)
+    if target.is_dir() and not image.is_file():
+        raise ValueError("matching release is not ready; image missing or not a regular file at " +
+                         str(image) + "\nRun: " + payload["setup_command"])
+    expected = {"helper.py": payload["helper"], "trusted.pem": payload["key"],
+                "release.json": encoded, "installation.json": installation}
+    if (not target.is_dir() or target.is_symlink() or not image.is_file() or any(
+            not (target / name).is_file() or (target / name).is_symlink()
+            or (target / name).read_bytes() != content.encode("utf-8")
+            for name, content in expected.items())):
+        raise ValueError("matching release is not ready at " + str(target) +
+                         "\nRun: " + payload["setup_command"])
+    verify(image, release, target / "trusted.pem")
+    print("Preflight passed; session launch is not implemented in this development client.")
+    return 1
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_mutually_exclusive_group(required=True)
     commands.add_argument("--describe", action="store_true",
                           help="Report this helper's release and protocol identity.")
     commands.add_argument("--setup", help=argparse.SUPPRESS)
+    commands.add_argument("--preflight", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.describe:
         release = json.loads(Path(__file__).with_name("release.json").read_text())
         print(json.dumps({key: release[key] for key in (
             "version", "protocol_version", "image_interface_version")}))
-    else:
+    elif args.setup:
         setup(json.loads(args.setup))
+    else:
+        return preflight(json.loads(args.preflight))
 
 
 if __name__ == "__main__":
     try:
-        main()
+        sys.exit(main())
     except (OSError, ValueError, KeyError, TypeError) as error:
-        print("codex-hpc: setup failed: " + str(error), file=sys.stderr)
+        print("codex-hpc: remote operation failed: " + str(error), file=sys.stderr)
         sys.exit(1)
     except KeyboardInterrupt:
         print("codex-hpc: setup interrupted; previous activation preserved; rerun setup", file=sys.stderr)
