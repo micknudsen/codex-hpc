@@ -13,6 +13,10 @@ def run(*args, **kwargs):
 
 
 candidate = Path(sys.argv[1]).resolve()
+provenance = json.loads((candidate / "provenance.json").read_text())
+exported = json.loads(run(sys.executable, str(candidate / "source/scripts/build_candidate.py"),
+                          "fingerprint"))
+assert exported["fingerprint"] == provenance["fingerprint"]
 with tempfile.TemporaryDirectory() as temporary:
     root = Path(temporary)
     venv.create(root / "venv", with_pip=True)

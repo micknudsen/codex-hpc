@@ -61,6 +61,40 @@ def fetch_binary(spec, target):
     archive.unlink()
 
 
+def package_client(stage, result, release, public_key):
+    package = stage / "package"
+    package.mkdir()
+    for name in ("pyproject.toml", "setup.cfg", "README.md", "LICENSE"):
+        shutil.copyfile(REPO / name, package / name)
+    shutil.copytree(REPO / "src", package / "src", ignore=shutil.ignore_patterns(
+        "*.egg-info", "__pycache__", "release"))
+    config = package / "setup.cfg"
+    config.write_text(re.sub(r"(?m)^version = .*", "version = " + release["version"],
+                             config.read_text()))
+    bundled = package / "src/codex_hpc/release"
+    bundled.mkdir()
+    shutil.copyfile(REPO / "src/codex_hpc/remote_helper.py", bundled / "helper.py")
+    release["helper_sha256"] = digest(bundled / "helper.py")
+    write_json(bundled / "release.json", release)
+    shutil.copyfile(public_key, bundled / "trusted.pem")
+    shutil.copytree(bundled, result / "release")
+    run(sys.executable, "-m", "pip", "wheel", "--no-deps", "--no-build-isolation",
+        "--wheel-dir", str(result), str(package))
+
+
+def export_source(result):
+    source = result / "source"
+    source.mkdir()
+    for directory in ("image", "src", "tests"):
+        shutil.copytree(REPO / directory, source / directory, ignore=shutil.ignore_patterns(
+            "*.egg-info", "__pycache__", "release"))
+    for relative in ("scripts/build_candidate.py", "scripts/install_apptainer_ci.sh",
+                     "docs/build-image.md", "README.md", "pyproject.toml", "setup.cfg", "LICENSE"):
+        target = source / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(REPO / relative, target)
+
+
 def build(args):
     provenance = inputs()
     lock = provenance["inputs"]
@@ -73,6 +107,10 @@ def build(args):
     for tool, version in actual.items():
         if version != expected[tool]:
             raise ValueError(tool + " version " + version + "; required " + expected[tool])
+    actual_packages = {name: run("dpkg-query", "-W", "-f=${Version}", name)
+                       for name in lock["build_packages"]}
+    if actual_packages != lock["build_packages"]:
+        raise ValueError("build package versions differ from image/inputs.json")
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[ab]|rc|\.dev)?[0-9]*", args.version):
         raise ValueError("version must be a numeric PEP 440 release or prerelease")
     output = Path(args.output).resolve()
@@ -132,33 +170,16 @@ def build(args):
                                     "codex-version", "runtime-executables"],
             "tested_apptainer": actual["apptainer"],
         }
-        package = stage / "package"
-        package.mkdir()
-        for name in ("pyproject.toml", "setup.cfg", "README.md", "LICENSE"):
-            shutil.copyfile(REPO / name, package / name)
-        shutil.copytree(REPO / "src", package / "src", ignore=shutil.ignore_patterns(
-            "*.egg-info", "__pycache__", "release"))
-        config = package / "setup.cfg"
-        config.write_text(re.sub(r"(?m)^version = .*", "version = " + args.version,
-                                 config.read_text()))
-        bundled = package / "src/codex_hpc/release"
-        bundled.mkdir()
-        shutil.copyfile(REPO / "src/codex_hpc/remote_helper.py", bundled / "helper.py")
-        release["helper_sha256"] = digest(bundled / "helper.py")
-        write_json(bundled / "release.json", release)
-        shutil.copyfile(public_key, bundled / "trusted.pem")
-        shutil.copytree(bundled, result / "release")
+        package_client(stage, result, release, public_key)
         provenance["signed_image_sha256"] = image_digest
         provenance["build_tools_observed"] = actual
+        provenance["build_packages_observed"] = actual_packages
         provenance["base_package_versions"] = packages.splitlines()
         provenance["qualification_output"] = probe.splitlines()
         write_json(result / "provenance.json", provenance)
         (result / "codex.def").write_text(definition)
-        shutil.copytree(REPO / "image", result / "image-inputs")
-        shutil.copyfile(Path(__file__), result / "build_candidate.py")
+        export_source(result)
         shutil.copyfile(REPO / "docs/build-image.md", result / "BUILD.md")
-        run(sys.executable, "-m", "pip", "wheel", "--no-deps", "--no-build-isolation",
-            "--wheel-dir", str(result), str(package))
         result.rename(output)
     print(str(output))
 

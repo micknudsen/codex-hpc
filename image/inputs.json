@@ -24,5 +24,11 @@
     "python": "3.12.3",
     "squashfs_tools": "4.6.1"
   },
+  "build_packages": {
+    "uidmap": "1:4.13+dfsg1-4ubuntu3.2",
+    "libsubid4": "1:4.13+dfsg1-4ubuntu3.2",
+    "fakeroot": "1.33-1",
+    "libfakeroot": "1.33-1"
+  },
   "build_arguments": ["build", "--fakeroot", "--disable-cache", "--mksquashfs-args", "-processors 2"]
 }
