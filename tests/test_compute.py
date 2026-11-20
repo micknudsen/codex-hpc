@@ -13,7 +13,7 @@ import test_allocation
 from test_setup import RemoteCLI
 
 
-class ComputeCLI(test_allocation.AllocationFixture):
+class ComputeFixture(test_allocation.AllocationFixture):
     def setUp(self):
         super().setUp()
         self.env["COMPUTE_LOG"] = str(self.root / "compute.jsonl")
@@ -86,7 +86,8 @@ with open(os.environ["COMPUTE_LOG"], "a") as log:
                          "ambient": [key for key in os.environ if key.startswith(("APPTAINER_BIND", "APPTAINERENV_", "SINGULARITY"))]}) + "\\n")
 if os.environ.get("PROBE_MOUNTS"):
     probe = os.environ["PROBE_MOUNTS"]
-    os.execv(os.environ["REAL_APPTAINER"], [os.environ["REAL_APPTAINER"], *sys.argv[1:-1],
+    executable = sys.argv.index("/usr/local/bin/codex")
+    os.execv(os.environ["REAL_APPTAINER"], [os.environ["REAL_APPTAINER"], *sys.argv[1:executable],
                                           "/usr/bin/python3", "-c", probe])
 if os.environ.get("INTERACTIVE_INPUT"):
     print("ready for terminal input", flush=True)
@@ -103,6 +104,8 @@ raise SystemExit(int(os.environ.get("CODEX_EXIT", "0")))
         path = Path(self.env["COMPUTE_LOG"])
         return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
+
+class ComputeCLI(ComputeFixture):
     def test_launches_on_assigned_node_inside_owned_step_and_preserves_exit(self):
         self.env["CODEX_EXIT"] = "7"
         result = self.connect()
@@ -119,7 +122,8 @@ raise SystemExit(int(os.environ.get("CODEX_EXIT", "0")))
             self.assertIn(flag, step["srun"])
         self.assertEqual(container["job"], "321")
         self.assertEqual(container["step"], "0")
-        self.assertEqual(container["apptainer"][-1], "/usr/local/bin/codex")
+        self.assertEqual(container["apptainer"][-2:], ["/usr/local/bin/codex",
+            '--config=cli_auth_credentials_store="file"'])
         self.assertEqual(container["apptainer"][container["apptainer"].index("--pwd") + 1], str(self.workspace.resolve()))
         self.assertEqual(json.loads(Path(self.env["JOBS"]).read_text()), {"777": "unrelated-job"})
         self.assertEqual(list(Path(self.env["NODE_TMP"]).iterdir()), [])

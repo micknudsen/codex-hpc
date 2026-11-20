@@ -13,6 +13,7 @@ import pwd
 from pathlib import Path
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -249,6 +250,9 @@ def compute(payload):
     workspace = Path(payload["workspace"])
     if workspace.resolve() != workspace:
         raise ValueError("workspace resolves differently on compute node: " + str(workspace))
+    state = Path(payload["roots"]["state"])
+    if state.resolve() != state:
+        raise ValueError("state resolves differently on compute node: " + str(state))
     for name, path, directory in (("workspace", payload["workspace"], True),
                                   ("helper", payload["helper"], False),
                                   ("image", payload["image"], False),
@@ -278,6 +282,84 @@ def compute(payload):
     return subprocess.run(command, env=environment).returncode
 
 
+class CredentialStore:
+    """Short locked snapshots and conditional commits; never lock a session."""
+
+    def __init__(self, root):
+        self.directory = root / "credentials"
+        self.directory.mkdir(mode=0o700, exist_ok=True)
+        info = self.directory.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+            raise ValueError("credential directory must be an owned directory, not a symlink")
+        self.directory.chmod(0o700)
+        self.path = self.directory / "auth.json"
+
+    @contextmanager
+    def locked(self):
+        descriptor = os.open(self.directory / "lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(descriptor, "r+b") as lock:
+            info = os.fstat(lock.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+                raise ValueError("credential lock must be an owned regular file")
+            os.fchmod(lock.fileno(), 0o600)
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            yield
+
+    @staticmethod
+    def read(path):
+        try:
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        except FileNotFoundError:
+            return None
+        with os.fdopen(descriptor, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+                raise ValueError("credential document must be an owned regular file")
+            os.fchmod(stream.fileno(), 0o600)
+            value = stream.read(1024 * 1024 + 1)
+        try:
+            parsed = json.loads(value)
+            if len(value) > 1024 * 1024 or not isinstance(parsed, dict) or not parsed:
+                raise ValueError()
+        except (ValueError, UnicodeError):
+            raise ValueError("credential document is invalid; existing saved login was preserved") from None
+        return value
+
+    def stage(self, path):
+        with self.locked():
+            initial = self.read(self.path)
+        if initial is not None:
+            path.write_bytes(initial)
+            path.chmod(0o600)
+        return initial
+
+    def persist(self, path, initial):
+        replacement = self.read(path)
+        if replacement is None or replacement == initial:
+            return
+        with self.locked():
+            if self.read(self.path) != initial:
+                # Another session has already saved a newer login.
+                return
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(prefix=".auth-", suffix=".tmp",
+                                                 dir=self.directory, delete=False) as stream:
+                    temporary = Path(stream.name)
+                    stream.write(replacement)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temporary, self.path)
+                descriptor = os.open(self.directory, os.O_RDONLY)
+                try:
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+
+
 def execute(payload):
     if os.environ.get("SLURM_JOB_ID") != payload["job_id"] or not os.environ.get("SLURM_STEP_ID"):
         raise ValueError("compute launch is not inside its owned Slurm job step")
@@ -293,6 +375,11 @@ def execute(payload):
             raise ValueError("node-local scratch lies within the workspace: " + str(scratch))
         home = scratch / "home"
         home.mkdir(mode=0o700)
+        codex_home = home / ".codex"
+        codex_home.mkdir(mode=0o700)
+        credentials = CredentialStore(Path(payload["roots"]["state"]))
+        auth = codex_home / "auth.json"
+        initial = credentials.stage(auth)
         work = scratch / "work"
         work.mkdir(mode=0o700)
         mount = io.StringIO()
@@ -305,9 +392,14 @@ def execute(payload):
         command = ["apptainer", "exec", "--cleanenv", "--containall", "--no-mount",
                    "hostfs,bind-paths,cwd", "--home", str(home) + ":" + internal_home,
                    "--workdir", str(work), "--mount", mount.getvalue(), "--pwd", str(workspace),
-                   "--env", "HOME=" + internal_home, payload["image"],
-                   payload["release"].get("executables", {}).get("codex", "/usr/local/bin/codex")]
-        return subprocess.run(command, env=environment, cwd=scratch).returncode
+                   "--env", "HOME=" + internal_home,
+                   "--env", "CODEX_HOME=" + internal_home + "/.codex", payload["image"],
+                   payload["release"].get("executables", {}).get("codex", "/usr/local/bin/codex"),
+                   '--config=cli_auth_credentials_store="file"']
+        try:
+            return subprocess.run(command, env=environment, cwd=scratch).returncode
+        finally:
+            credentials.persist(auth, initial)
 
 
 def slurm(arguments):
