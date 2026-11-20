@@ -108,6 +108,11 @@ with open(os.environ["COMPUTE_LOG"], "a") as log:
 if os.environ.get("PROBE_MOUNTS"):
     probe = os.environ["PROBE_MOUNTS"]
     executable = sys.argv.index("/usr/local/bin/codex")
+    if os.environ.get("VALIDATE_CODEX_COMMAND"):
+        # Exercise the exact candidate-generated command and global arguments
+        # before replacing the interactive UI with the deterministic mount probe.
+        import subprocess
+        subprocess.run([os.environ["REAL_APPTAINER"], *sys.argv[1:], "login", "status"], check=True)
     os.execv(os.environ["REAL_APPTAINER"], [os.environ["REAL_APPTAINER"], *sys.argv[1:executable],
                                           "/usr/bin/python3", "-c", probe])
 if os.environ.get("INTERACTIVE_INPUT"):

@@ -30,7 +30,8 @@ class RemoteCLI(unittest.TestCase):
         cls.real = bool(candidate)
         if candidate:
             candidate = Path(candidate)
-            cls.image = candidate / "codex-hpc-linux-amd64.sif"
+            cls.image = Path(os.environ.get("CODEX_HPC_TEST_IMAGE",
+                                           str(candidate / "codex-hpc-linux-amd64.sif")))
             wheel = next(candidate.glob("*.whl"))
             cls.apptainer = shutil.which("apptainer")
         else:
