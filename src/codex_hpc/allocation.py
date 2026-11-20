@@ -8,8 +8,7 @@ import uuid
 
 def connect(host, remote, resources):
     marker = "codex-hpc-" + uuid.uuid4().hex
-    job_id = None
-    cluster = []
+    cancellation = None
     print("Slurm request: nodes=1 tasks=1 " + " ".join(
         name + "=" + (value if value is not None else "Slurm default")
         for name, value in resources.items()), flush=True)
@@ -32,9 +31,9 @@ def connect(host, remote, resources):
         if response is None:
             raise ValueError("submission failed or its response was lost; use the printed job name "
                              "to inspect squeue before retrying")
-        job_id = response.group(1)
         cluster = ["--clusters=" + response.group(2)] if response.group(2) else []
-        cancellation = ["scancel", *cluster, "--name=" + marker, job_id]
+        cancellation = ["scancel", *cluster, "--name=" + marker, response.group(1)]
+        job_id = response.group(1)
         print("Cancel: " + shlex.join(["ssh", host, shlex.join(cancellation)]), flush=True)
         if result.returncode:
             raise ValueError("submission transport failed after returning job " + job_id)
@@ -69,9 +68,9 @@ def connect(host, remote, resources):
         print("codex-hpc: " + str(error), file=sys.stderr)
         return 1
     finally:
-        if job_id is not None:
+        if cancellation is not None:
             try:
-                result = remote("slurm", ["scancel", *cluster, "--name=" + marker, job_id])
+                result = remote("slurm", cancellation)
                 if result.returncode:
                     print("codex-hpc: cleanup failed; run the printed Cancel command.", file=sys.stderr)
             except (OSError, KeyboardInterrupt):
