@@ -11,8 +11,8 @@ Maintainers can [build and qualify a signed image candidate](docs/build-image.md
 A candidate client wheel bundles its matching helper, image metadata and trust key.
 Its `setup` prepares that release on the login host and reports success only after
 verification and atomic activation. A source-only install has no release bundle;
-it reports discovered paths and exits nonzero. `connect` still stops after
-discovery while session startup is implemented. Neither command submits a job or
+it reports discovered paths and exits nonzero. `connect` validates its workspace
+and installed release, then stops after preflight while session startup is implemented. Neither command submits a job or
 starts sign-in at this stage.
 
 Install from this checkout with Python 3.9 or later:
@@ -51,9 +51,18 @@ exist. Setup checks writability and available space before an image transfer.
 Filesystem quotas can still reject a write; setup reports that failure without
 changing the active installation.
 
-`connect` requires an explicit workspace; workspace validation and session launch
-belong to later implementation steps. Run either command with `--help` for its
-arguments.
+`connect` requires an explicit existing workspace, given as an absolute path or
+quoted `'~/project'`. It resolves project symlinks on the login host and displays
+the canonical path. Missing directories, regular files, bare relative paths, and
+workspaces that expose managed helpers, credentials, images or temporary files
+are rejected before requesting resources. This includes managed paths exposed
+through workspace symlinks. Run either command with `--help` for its arguments.
+
+Every connection checks the matching installed helper, metadata and public key,
+then rechecks the image's signed digest and signature. A missing or incomplete
+release prints the exact `setup` command with the selected destination and roots.
+In this development stage a successful preflight still exits nonzero because
+allocation and session launch are not implemented yet.
 
 ## Remote setup
 
@@ -88,6 +97,8 @@ Setup scenarios also cover cold/warm installation, low space, transfer and quota
 errors, wrong keys, damaged bytes, concurrent attempts, interrupted transfer and
 retry, and a newer client referencing an older asset. The regular suite controls
 Apptainer responses; the signed-image CI job repeats setup with the actual signed
-SIF and real signature verification. These do not claim real-cluster or real-SSH
-qualification. CI runs the same suite
+SIF and real signature verification. Connect tests exercise canonical paths, managed-path isolation,
+literal setup recovery, missing or changed installed files and cached-image
+tampering, with zero Slurm submissions; CI repeats them with the real SIF. These
+do not claim real-cluster or real-SSH qualification. CI runs the same suite
 on Ubuntu 24.04 and macOS with Python 3.9 and 3.14 for PRs and after merge to `master`.
