@@ -246,6 +246,9 @@ def compute(payload):
     detected = platform.system() + " " + platform.machine()
     if detected != "Linux x86_64":
         raise ValueError("unsupported compute platform " + detected + "; required Linux x86_64")
+    workspace = Path(payload["workspace"])
+    if workspace.resolve() != workspace:
+        raise ValueError("workspace resolves differently on compute node: " + str(workspace))
     for name, path, directory in (("workspace", payload["workspace"], True),
                                   ("helper", payload["helper"], False),
                                   ("image", payload["image"], False),
@@ -285,7 +288,7 @@ def execute(payload):
         raise ValueError("workspace overlaps the private container home: " + str(workspace))
     # /tmp is the node-local scratch boundary, independent of a shared TMPDIR.
     with tempfile.TemporaryDirectory(prefix="codex-hpc-", dir="/tmp") as temporary:
-        scratch = Path(temporary)
+        scratch = Path(temporary).resolve()
         if contains(workspace, scratch):
             raise ValueError("node-local scratch lies within the workspace: " + str(scratch))
         home = scratch / "home"

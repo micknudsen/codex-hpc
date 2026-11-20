@@ -11,8 +11,11 @@ import sys
 from . import allocation
 
 
-def ssh_arguments(host, command):
-    return ["ssh", "-T", "-o", "ForwardAgent=no", "-o", "ForwardX11=no", "--", host, command]
+def ssh_arguments(host, command, jump_host=None):
+    arguments = ["ssh", "-tt" if jump_host else "-T", "-o", "ForwardAgent=no", "-o", "ForwardX11=no"]
+    if jump_host:
+        arguments.extend(["-o", "ControlMaster=no", "-o", "ControlPath=none", "-J", jump_host])
+    return [*arguments, "--", host, command]
 
 
 def main():
@@ -120,10 +123,8 @@ def main():
                 request = dict(ready, job_id=job_id, node=node, cluster=cluster,
                                cpus=resources["cpus"], release=payload["release"])
                 command = shlex.join(["python3", ready["helper"], "--compute", json.dumps(request)])
-                return subprocess.run([
-                    "ssh", "-tt", "-o", "ForwardAgent=no", "-o", "ForwardX11=no",
-                    "-o", "ControlMaster=no", "-o", "ControlPath=none", "-J", args.host,
-                    "--", ready["user"] + "@" + node, command]).returncode
+                return subprocess.run(ssh_arguments(
+                    ready["user"] + "@" + node, command, jump_host=args.host)).returncode
 
             return allocation.connect(args.host, remote, resources, launch)
         except (OSError, ValueError) as error:

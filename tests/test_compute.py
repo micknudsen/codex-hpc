@@ -28,6 +28,12 @@ if "-J" in sys.argv:
         log.write(json.dumps({"ssh": sys.argv[1:], "pid": os.getpid()}) + "\\n")
     env["NODE_STAGE"] = "1"
     if env.get("NODE_SSH_FAIL"): raise SystemExit(255)
+    if env.get("NODE_WORKSPACE_ALIAS"):
+        from pathlib import Path
+        workspace = Path(env["NODE_WORKSPACE_ALIAS"])
+        replacement = workspace.with_name("other-node-directory")
+        workspace.rename(replacement)
+        workspace.symlink_to(replacement)
     if env.get("NODE_CHANGE_IMAGE"):
         image = next(__import__("pathlib").Path(env["REMOTE_HOME"]).glob(".cache/codex-hpc/images/*/*.sif"))
         image.chmod(0o644)
@@ -252,4 +258,23 @@ print("actual mount boundary passed")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("compute image differs", result.stderr)
         self.assertEqual(len(self.compute_events()), 1)
+        self.assertEqual(json.loads(Path(self.env["JOBS"]).read_text()), {"777": "unrelated-job"})
+
+    def test_compute_aliases_cannot_change_workspace_or_place_scratch_inside_it(self):
+        self.env["NODE_WORKSPACE_ALIAS"] = str(self.workspace)
+        result = self.connect()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("workspace resolves differently", result.stderr)
+        self.assertEqual(len(self.compute_events()), 1)
+        del self.env["NODE_WORKSPACE_ALIAS"]
+        replacement = self.workspace.resolve()
+        self.workspace.unlink()
+        replacement.rename(self.workspace)
+        alias = self.root / "node-tmp-alias"
+        alias.symlink_to(self.workspace)
+        self.env["NODE_TMP"] = str(alias)
+        result = self.connect()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("scratch lies within", result.stderr)
+        self.assertEqual(list(self.workspace.iterdir()), [])
         self.assertEqual(json.loads(Path(self.env["JOBS"]).read_text()), {"777": "unrelated-job"})
