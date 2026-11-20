@@ -10,7 +10,7 @@ import time
 from test_setup import RemoteCLI
 
 
-class AllocationCLI(RemoteCLI):
+class AllocationFixture(RemoteCLI):
     def setUp(self):
         super().setUp()
         self.workspace = self.home / "workspace æ"
@@ -84,6 +84,8 @@ with open(os.environ["SCHEDULER_LOG"], "a") as log:
         path = Path(self.env["SCHEDULER_LOG"])
         return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
+
+class AllocationCLI(AllocationFixture):
     def test_default_request_prints_recovery_and_cleans_only_owned_job(self):
         result = self.connect()
         events = self.scheduler_events()
@@ -102,7 +104,8 @@ with open(os.environ["SCHEDULER_LOG"], "a") as log:
         self.assertEqual(shlex.split(recovery), ["ssh", "test-login", "scancel --name=" + marker + " 321"])
         self.assertEqual(events[-1]["args"], ["--name=" + marker, "321"])
         self.assertEqual(json.loads(Path(self.env["JOBS"]).read_text()), {"777": "unrelated-job"})
-        self.assertIn("session launch is not implemented", result.stderr)
+        # This fixture has no compute-node tools/platform; launch failure still
+        # follows the same exact owned-allocation cleanup rule.
         self.assertNotEqual(result.returncode, 0)
 
     def test_resource_overrides_and_environment_defaults_are_literal(self):

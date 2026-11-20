@@ -4,21 +4,30 @@ from importlib.resources import files
 import json
 import os
 import shlex
+import signal
 import subprocess
 import sys
 
 from . import allocation
 
 
-def ssh_arguments(host, command):
-    return ["ssh", "-T", "-o", "ForwardAgent=no", "-o", "ForwardX11=no", "--", host, command]
+def ssh_arguments(host, command, jump_host=None):
+    arguments = ["ssh", "-tt" if jump_host else "-T", "-o", "ForwardAgent=no", "-o", "ForwardX11=no"]
+    if jump_host:
+        arguments.extend(["-o", "ControlMaster=no", "-o", "ControlPath=none", "-J", jump_host])
+    return [*arguments, "--", host, command]
 
 
 def main():
+    def interrupted(signum, frame):
+        raise KeyboardInterrupt
+
+    for signum in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(signum, interrupted)
     parser = argparse.ArgumentParser(
         description="Run Codex in one remote Slurm workspace.",
         epilog="Setup installs the bundled release on the login host. "
-               "Development build: connect does not launch sessions yet.")
+               "Connect launches Codex in one isolated Slurm workspace.")
     commands = parser.add_subparsers(dest="command", required=True)
     for command, help_text in (("setup", "Prepare the matching remote release."),
                                ("connect", "Run Codex in an existing remote workspace.")):
@@ -110,7 +119,14 @@ def main():
             ready = json.loads(result.stdout)
             print("Workspace: " + ready["workspace"], flush=True)
             print("Preflight passed.", flush=True)
-            return allocation.connect(args.host, remote, resources)
+            def launch(job_id, node, cluster):
+                request = dict(ready, job_id=job_id, node=node, cluster=cluster,
+                               cpus=resources["cpus"], release=payload["release"])
+                command = shlex.join(["python3", ready["helper"], "--compute", json.dumps(request)])
+                return subprocess.run(ssh_arguments(
+                    ready["user"] + "@" + node, command, jump_host=args.host)).returncode
+
+            return allocation.connect(args.host, remote, resources, launch)
         except (OSError, ValueError) as error:
             print("codex-hpc: " + args.command + " failed: " + str(error), file=sys.stderr)
             return 1

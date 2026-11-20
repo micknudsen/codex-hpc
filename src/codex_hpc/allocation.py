@@ -6,7 +6,7 @@ import time
 import uuid
 
 
-def connect(host, remote, resources):
+def connect(host, remote, resources, launch):
     marker = "codex-hpc-" + uuid.uuid4().hex
     cancellation = None
     print("Slurm request: nodes=1 tasks=1 " + " ".join(
@@ -55,9 +55,9 @@ def connect(host, remote, resources):
                 print("Job " + job_id + ": " + state + " (" + reason + ")", flush=True)
                 previous = status
             if state == "RUNNING":
-                print("codex-hpc: allocation ready on " + node +
-                      "; session launch is not implemented in this development client", file=sys.stderr)
-                return 1
+                if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", node):
+                    raise ValueError("Slurm returned an invalid single compute node: " + node)
+                return launch(job_id, node, cluster)
             if state not in ("PENDING", "CONFIGURING"):
                 raise ValueError("owned Slurm job stopped in state " + state)
             time.sleep(5)

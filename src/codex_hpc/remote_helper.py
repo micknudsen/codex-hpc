@@ -1,13 +1,18 @@
 """Self-contained helper bundled beside its matching release metadata."""
 import argparse
+import csv
 from contextlib import ExitStack, contextmanager
 import fcntl
 import hashlib
 import json
+import io
 import os
 import re
+import platform
+import pwd
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -225,7 +230,84 @@ def preflight(payload):
         raise ValueError("matching release is not ready at " + str(target) +
                          "\nRun: " + payload["setup_command"])
     verify(image, release, target / "trusted.pem")
-    return {"workspace": str(workspace), "helper": str(target / "helper.py"), "image": str(image)}
+    return {"workspace": str(workspace), "helper": str(target / "helper.py"), "image": str(image),
+            "user": pwd.getpwuid(os.getuid()).pw_name,
+            "roots": {name: str(path) for name, path in roots.items()}}
+
+
+def compute_environment(inside_step=False):
+    # Prevent host options from adding mounts, changing the requested step, or
+    # injecting container variables despite --cleanenv.
+    prefixes = ("APPTAINER", "SINGULARITY", "SRUN_") + (() if inside_step else ("SLURM_",))
+    return {key: value for key, value in os.environ.items() if not key.startswith(prefixes)}
+
+
+def compute(payload):
+    detected = platform.system() + " " + platform.machine()
+    if detected != "Linux x86_64":
+        raise ValueError("unsupported compute platform " + detected + "; required Linux x86_64")
+    workspace = Path(payload["workspace"])
+    if workspace.resolve() != workspace:
+        raise ValueError("workspace resolves differently on compute node: " + str(workspace))
+    for name, path, directory in (("workspace", payload["workspace"], True),
+                                  ("helper", payload["helper"], False),
+                                  ("image", payload["image"], False),
+                                  ("state", payload["roots"]["state"], True)):
+        location = Path(path)
+        if not (location.is_dir() if directory else location.is_file()) or not os.access(path, os.R_OK):
+            raise ValueError("compute node cannot access " + name + " path: " + path)
+    for tool in ("srun", "apptainer"):
+        if shutil.which(tool) is None:
+            raise ValueError("required compute tool is missing: " + tool)
+    image = Path(payload["image"])
+    expected = payload["release"]["image"]
+    if image.stat().st_size != expected["size"] or digest(image) != expected["sha256"]:
+        raise ValueError("compute image differs from the verified release: " + str(image))
+    if digest(Path(payload["helper"])) != payload["release"]["helper_sha256"]:
+        raise ValueError("compute helper differs from the verified release: " + payload["helper"])
+    environment = compute_environment()
+    capabilities = subprocess.run(["apptainer", "exec", "--help"], env=environment,
+                                  capture_output=True, text=True)
+    for option in ("--cleanenv", "--containall", "--no-mount", "--home", "--mount", "--pwd", "--env", "--workdir"):
+        if capabilities.returncode or option not in capabilities.stdout:
+            raise ValueError("compute Apptainer lacks required capability " + option)
+    command = ["srun", "--jobid=" + payload["job_id"], *payload["cluster"],
+               "--nodes=1", "--ntasks=1", "--nodelist=" + payload["node"],
+               "--cpus-per-task=" + payload["cpus"], "--exact", "--pty", "--export=ALL",
+               "python3", payload["helper"], "--execute", json.dumps(payload)]
+    return subprocess.run(command, env=environment).returncode
+
+
+def execute(payload):
+    if os.environ.get("SLURM_JOB_ID") != payload["job_id"] or not os.environ.get("SLURM_STEP_ID"):
+        raise ValueError("compute launch is not inside its owned Slurm job step")
+    os.umask(0o077)
+    workspace = Path(payload["workspace"])
+    internal_home = "/codex-hpc-home"
+    if contains(workspace, Path(internal_home)) or contains(Path(internal_home), workspace):
+        raise ValueError("workspace overlaps the private container home: " + str(workspace))
+    # /tmp is the node-local scratch boundary, independent of a shared TMPDIR.
+    with tempfile.TemporaryDirectory(prefix="codex-hpc-", dir="/tmp") as temporary:
+        scratch = Path(temporary).resolve()
+        if contains(workspace, scratch):
+            raise ValueError("node-local scratch lies within the workspace: " + str(scratch))
+        home = scratch / "home"
+        home.mkdir(mode=0o700)
+        work = scratch / "work"
+        work.mkdir(mode=0o700)
+        mount = io.StringIO()
+        csv.writer(mount, lineterminator="").writerow([
+            "type=bind", "src=" + str(workspace), "dst=" + str(workspace)])
+        environment = compute_environment(inside_step=True)
+        environment.update(APPTAINER_CONFIGDIR=str(scratch / "config"),
+                           APPTAINER_CACHEDIR=str(scratch / "cache"),
+                           APPTAINER_TMPDIR=str(scratch), TMPDIR=str(scratch))
+        command = ["apptainer", "exec", "--cleanenv", "--containall", "--no-mount",
+                   "hostfs,bind-paths,cwd", "--home", str(home) + ":" + internal_home,
+                   "--workdir", str(work), "--mount", mount.getvalue(), "--pwd", str(workspace),
+                   "--env", "HOME=" + internal_home, payload["image"],
+                   payload["release"].get("executables", {}).get("codex", "/usr/local/bin/codex")]
+        return subprocess.run(command, env=environment, cwd=scratch).returncode
 
 
 def slurm(arguments):
@@ -245,6 +327,11 @@ def slurm(arguments):
 
 
 def main():
+    def interrupted(signum, frame):
+        raise KeyboardInterrupt
+
+    for signum in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(signum, interrupted)
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_mutually_exclusive_group(required=True)
     commands.add_argument("--describe", action="store_true",
@@ -252,6 +339,8 @@ def main():
     commands.add_argument("--setup", help=argparse.SUPPRESS)
     commands.add_argument("--preflight", help=argparse.SUPPRESS)
     commands.add_argument("--slurm", help=argparse.SUPPRESS)
+    commands.add_argument("--compute", help=argparse.SUPPRESS)
+    commands.add_argument("--execute", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.describe:
         release = json.loads(Path(__file__).with_name("release.json").read_text())
@@ -261,6 +350,10 @@ def main():
         setup(json.loads(args.setup))
     elif args.slurm:
         slurm(json.loads(args.slurm))
+    elif args.compute:
+        return compute(json.loads(args.compute))
+    elif args.execute:
+        return execute(json.loads(args.execute))
     else:
         print(json.dumps(preflight(json.loads(args.preflight))))
 
@@ -272,5 +365,5 @@ if __name__ == "__main__":
         print("codex-hpc: remote operation failed: " + str(error), file=sys.stderr)
         sys.exit(1)
     except KeyboardInterrupt:
-        print("codex-hpc: setup interrupted; previous activation preserved; rerun setup", file=sys.stderr)
+        print("codex-hpc: remote operation interrupted.", file=sys.stderr)
         sys.exit(130)

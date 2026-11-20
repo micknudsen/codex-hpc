@@ -12,9 +12,10 @@ A candidate client wheel bundles its matching helper, image metadata and trust k
 Its `setup` prepares that release on the login host and reports success only after
 verification and atomic activation. A source-only install has no release bundle;
 it reports discovered paths and exits nonzero. `connect` validates its workspace
-and installed release, submits and monitors one owned allocation, then releases
-it and exits nonzero because compute-node session launch is still being implemented.
-Setup never submits a job; neither command starts sign-in at this stage.
+and installed release, submits and monitors one owned allocation, and launches
+interactive Codex on its assigned node. Setup never submits a job. Managed
+credential reuse and browser forwarding are still being implemented; this candidate
+does not yet provide the complete first-sign-in workflow.
 
 Install from this checkout with Python 3.9 or later:
 
@@ -81,9 +82,8 @@ Account and partition are left to Slurm when omitted and are displayed as such.
 
 The client prints a unique job name before one `sbatch --parsable` submission and
 an exact SSH `scancel` command as soon as it receives the job ID. The batch job
-holds the allocation with `sleep infinity`; the future interactive `srun` step
-will run in this same allocation. This development version releases the ready
-allocation immediately and reports that session launch is not implemented.
+holds the allocation with `sleep infinity`; the interactive `srun` step runs in
+this same allocation, with one node/task and the requested CPUs.
 
 While pending, connect polls no more often than every five seconds and prints
 only changes in state or reason. There is no client queue timeout; Slurm's time
@@ -103,6 +103,33 @@ These command contracts follow the official [sbatch](https://slurm.schedmd.com/s
 [squeue](https://slurm.schedmd.com/squeue.html), and [scancel](https://slurm.schedmd.com/scancel.html)
 documentation. A cluster-qualified submission response retains that cluster for
 polling and cancellation.
+
+## Compute session
+
+Once the owned job is running, the client uses the selected login host as an SSH
+jump host to its assigned node, with the login account's remote username. Normal
+host-key verification and authentication remain enabled; agent/X11 forwarding and
+connection sharing are disabled for the session connection. SSH and `srun --pty`
+carry the interactive terminal, and the Codex exit status is returned to the client.
+
+The node must be Linux x86-64, provide compatible Apptainer and Slurm tools, and
+access the workspace, helper, image and state directory at their expected shared
+paths. Image/helper bytes are checked before launch. A failure identifies the
+platform, path or capability and triggers owned-job cleanup.
+
+The step creates a private node-local directory under `/tmp`, independent of a
+shared `TMPDIR`. Its home and scratch expire when the step exits, including Ctrl-C.
+Apptainer disables automatic host filesystem, configured bind, home and current
+directory mounts, ignores ambient container mount/variable overrides, and mounts
+one writable workspace at its original absolute path. Codex starts there. The
+container home is `/codex-hpc-home`; a workspace overlapping that reserved path is
+rejected. Workspace edits persist. SSH loss and startup failure return through the
+same allocation cleanup path; hard termination still requires the printed manual
+recovery command.
+
+The launch follows [Slurm srun](https://slurm.schedmd.com/srun.html) and
+[Apptainer bind isolation](https://apptainer.org/docs/user/1.5/bind_paths_and_mounts.html).
+Actual site forwarding, scheduler limits and authentication are qualified separately.
 
 ## Remote setup
 
@@ -143,6 +170,11 @@ tampering, with zero Slurm submissions on preflight failure. Allocation tests co
 resource precedence, pending/running/failed/vanished jobs, actual five-second poll
 spacing, deduplicated status, lost responses, Ctrl-C before/after ID receipt, and
 cleanup with unrelated or reused job IDs present. CI repeats these with the real SIF
-and controlled scheduler executables. These
+and controlled scheduler executables. Compute tests cover jump-host/step identity,
+TTY input, exit propagation, node/platform/runtime errors and interrupted process
+and scratch cleanup. Linux image CI also runs a probe inside the real container
+through packaged connect: workspace writes persist while sibling, personal and
+credential files stay inaccessible. The probe substitutes a controlled process for
+interactive Codex, whose pinned executable is qualified during image building. These
 do not claim real-cluster or real-SSH qualification. CI runs the same suite
 on Ubuntu 24.04 and macOS with Python 3.9 and 3.14 for PRs and after merge to `master`.
