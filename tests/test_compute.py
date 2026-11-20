@@ -38,6 +38,19 @@ if "-J" in sys.argv:
         image = next(__import__("pathlib").Path(env["REMOTE_HOME"]).glob(".cache/codex-hpc/images/*/*.sif"))
         image.chmod(0o644)
         with image.open("r+b") as stream: stream.write(b"different image on node")
+if "-J" in sys.argv and "--authenticate" in sys.argv[-1]:
+    # Model SSH connection loss hanging up the remote step, while preserving
+    # the client's real controlling terminal for authentication prompts.
+    import signal
+    child = subprocess.Popen(["/bin/sh", "-c", sys.argv[-1]], env=env, start_new_session=True)
+    def disconnect(signum, frame):
+        if child.poll() is None:
+            os.killpg(child.pid, signal.SIGTERM)
+        child.wait()
+        raise SystemExit(130)
+    for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        signal.signal(signum, disconnect)
+    raise SystemExit(child.wait())
 raise SystemExit(subprocess.call(["/bin/sh", "-c", sys.argv[-1]], env=env))
 ''')
         self.script("python3", '''

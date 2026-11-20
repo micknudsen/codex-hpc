@@ -9,13 +9,7 @@ import subprocess
 import sys
 
 from . import allocation, signin
-
-
-def ssh_arguments(host, command, jump_host=None, terminal=True):
-    arguments = ["ssh", "-tt" if jump_host and terminal else "-T", "-o", "ForwardAgent=no", "-o", "ForwardX11=no"]
-    if jump_host:
-        arguments.extend(["-o", "ControlMaster=no", "-o", "ControlPath=none", "-J", jump_host])
-    return [*arguments, "--", host, command]
+from .transport import ssh_arguments
 
 
 def main():

@@ -7,6 +7,8 @@ import time
 import subprocess
 import signal
 import sys
+import pty
+import select
 
 from test_compute import ComputeFixture
 
@@ -23,10 +25,13 @@ class SignInCLI(ComputeFixture):
         insertion = '''
 from pathlib import Path
 import signal, time
-def event(name):
-    with open(os.environ["SIGNIN_LOG"], "a") as log: log.write(json.dumps({"event": name}) + "\\n")
+def event(name, **values):
+    with open(os.environ["SIGNIN_LOG"], "a") as log: log.write(json.dumps(dict(event=name, **values)) + "\\n")
 if "-O" in sys.argv:
     control = Path(sys.argv[sys.argv.index("-S") + 1])
+    if os.environ.get("TUNNEL_CLOSE_FAIL"):
+        event("close-failed")
+        raise SystemExit(255)
     if control.exists():
         os.kill(int(control.read_text()), signal.SIGTERM)
         deadline = time.monotonic() + 5
@@ -46,11 +51,18 @@ if "-f" in sys.argv:
     if ready.strip() != "ready":
         child.wait()
         raise SystemExit(255)
-    event("tunnel-ready")
+    event("tunnel-ready", control=control, pid=child.pid)
     if os.environ.get("DELAY_FORWARDING_RESPONSE"):
         event("forwarding-response-pending")
         time.sleep(30)
     raise SystemExit(0)
+if "-J" in sys.argv and "--authenticate" in sys.argv[-1] and os.environ.get("SSH_PROMPT"):
+    with open("/dev/tty", "w") as terminal:
+        terminal.write("Confirm compute SSH: ")
+        terminal.flush()
+    with open("/dev/tty", "r") as terminal:
+        if terminal.readline().strip() != "yes": raise SystemExit(255)
+    event("ssh-confirmed")
 '''
         (self.bin / "ssh").write_text(ssh.replace("env = os.environ.copy()", insertion + "\nenv = os.environ.copy()"))
         self.script("tunnel", '''
@@ -80,11 +92,14 @@ while True: time.sleep(1)
 import json, os, socket, sys
 from urllib.parse import parse_qs, urlparse
 with open(os.environ["SIGNIN_LOG"], "a") as log:
-    log.write(json.dumps({"event": "browser", "url": sys.argv[-1]}) + "\\n")
+    log.write(json.dumps({"event": "browser", "url": sys.argv[-1], "pid": os.getpid()}) + "\\n")
 if os.environ.get("BROWSER_FAIL"): raise SystemExit(1)
 redirect = parse_qs(urlparse(sys.argv[-1]).query)["redirect_uri"][0]
 with socket.create_connection(("127.0.0.1", urlparse(redirect).port)) as callback:
     callback.sendall(b"disposable callback")
+if os.environ.get("BROWSER_STAYS_OPEN"):
+    import time
+    time.sleep(30)
 ''')
         apptainer = (self.bin / "apptainer").read_text()
         prefix = apptainer[:apptainer.index('if sys.argv[-2:] == ["login", "status"]:')]
@@ -324,3 +339,80 @@ print("signed-in interactive session")
             if process.poll() is None:
                 process.send_signal(signal.SIGINT)
             process.communicate(timeout=35)
+
+    def test_failed_tunnel_close_preserves_recovery_and_stops_startup(self):
+        self.env["TUNNEL_CLOSE_FAIL"] = "1"
+        control = None
+        try:
+            result = self.connect()
+            event = next(item for item in self.signin_events() if item["event"] == "tunnel-ready")
+            control = Path(event["control"])
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Close it with:", result.stderr)
+            self.assertIn(str(control), result.stderr)
+            self.assertTrue(control.exists(), "failed shutdown must retain its recovery socket")
+            self.assertNotIn("interactive", [item["event"] for item in self.signin_events()])
+            self.assertEqual(json.loads(Path(self.env["JOBS"]).read_text()), {"777": "unrelated-job"})
+        finally:
+            events = [item for item in self.signin_events() if item["event"] == "tunnel-ready"]
+            if events:
+                try: os.kill(events[0]["pid"], signal.SIGTERM)
+                except ProcessLookupError: pass
+                deadline = time.monotonic() + 5
+                control = Path(events[0]["control"])
+                while control.exists() and time.monotonic() < deadline: time.sleep(0.01)
+                if control.parent.exists(): control.parent.rmdir()
+
+    def test_compute_ssh_can_prompt_on_controlling_terminal(self):
+        self.save_auth()
+        self.env["SSH_PROMPT"] = "1"
+        pid, terminal = pty.fork()
+        if pid == 0:
+            os.chdir(self.root)
+            os.execve(str(self.cli), self.connect_command(), self.env)
+        output = b""
+        status = None
+        try:
+            deadline = time.monotonic() + 20
+            while b"Confirm compute SSH:" not in output and time.monotonic() < deadline:
+                if select.select([terminal], [], [], 0.05)[0]:
+                    try: output += os.read(terminal, 65536)
+                    except OSError: break
+            self.assertIn(b"Confirm compute SSH:", output)
+            os.write(terminal, b"yes\n")
+            while time.monotonic() < deadline:
+                child, status = os.waitpid(pid, os.WNOHANG)
+                if child: break
+                if select.select([terminal], [], [], 0.05)[0]:
+                    try: output += os.read(terminal, 65536)
+                    except OSError: pass
+            self.assertEqual(child, pid, output.decode())
+            self.assertEqual(os.waitstatus_to_exitcode(status), 0, output.decode())
+        finally:
+            try:
+                os.kill(pid, signal.SIGTERM)
+                os.waitpid(pid, 0)
+            except ProcessLookupError: pass
+            except ChildProcessError: pass
+            os.close(terminal)
+
+    def test_long_lived_browser_does_not_delay_tunnel_close_or_session(self):
+        self.env["BROWSER_STAYS_OPEN"] = "1"
+        process = subprocess.Popen(self.connect_command(), env=self.env, cwd=self.root,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            self.wait_event("authenticated", process)
+            try:
+                stdout, stderr = process.communicate(timeout=4)
+            except subprocess.TimeoutExpired:
+                self.fail("browser lifetime delayed completed sign-in")
+            self.assertEqual(process.returncode, 0, stderr)
+            self.assertIn("tunnel-closed", [event["event"] for event in self.signin_events()])
+            self.assertIn("signed-in interactive session", stdout)
+        finally:
+            for event in self.signin_events():
+                if event["event"] == "browser":
+                    try: os.kill(event["pid"], signal.SIGTERM)
+                    except ProcessLookupError: pass
+            if process.poll() is None: process.send_signal(signal.SIGINT)
+            process.communicate(timeout=10)
