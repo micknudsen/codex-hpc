@@ -14,8 +14,8 @@ verification and atomic activation. A source-only install has no release bundle;
 it reports discovered paths and exits nonzero. `connect` validates its workspace
 and installed release, submits and monitors one owned allocation, and launches
 interactive Codex on its assigned node. Setup never submits a job. Managed
-credential reuse and browser forwarding are still being implemented; this candidate
-does not yet provide the complete first-sign-in workflow.
+credentials are shared within the selected state root. Browser forwarding is still
+being implemented; this candidate does not yet provide the complete first-sign-in workflow.
 
 Install from this checkout with Python 3.9 or later:
 
@@ -131,6 +131,31 @@ The launch follows [Slurm srun](https://slurm.schedmd.com/srun.html) and
 [Apptainer bind isolation](https://apptainer.org/docs/user/1.5/bind_paths_and_mounts.html).
 Actual site forwarding, scheduler limits and authentication are qualified separately.
 
+## Shared login
+
+Sessions using the same remote state root share only the Codex login. The helper
+keeps its credential document and lock in a private `credentials/` directory
+(mode 0700, files 0600). It stages `auth.json` into the session's private home,
+sets `CODEX_HOME` there, and explicitly selects Codex's file credential store.
+The persistent directory is never mounted into the container. An empty state root
+supports a first login; a separate `--state-root` keeps another account independent.
+SSH aliases and workspaces do not change which login a state root selects.
+
+Credential reads and commits hold a short lock, allowing overlapping sessions.
+An updated document replaces the saved login atomically only if the saved document
+has not changed since that session started. Closing a stale session therefore
+preserves a newer saved login. Interrupted commits leave a complete old or new
+document. Malformed or symlinked documents are rejected without logging their
+contents. History, personal settings and login logs in the temporary home expire;
+only `auth.json` is carried forward. Workspace edits remain in the workspace.
+
+This follows the pinned Codex 0.170.0
+[auth document](https://github.com/openai/codex/blob/rust-v0.170.0/codex-rs/login/src/auth/storage.rs)
+and [file-store setting](https://github.com/openai/codex/blob/rust-v0.170.0/codex-rs/config/src/types.rs).
+Tests use disposable credential documents and a controlled Codex process; they
+do not authenticate a production account. Browser/device sign-in orchestration
+is a separate implementation issue.
+
 ## Remote setup
 
 Install a qualified candidate wheel, then run `codex-hpc setup --host my-cluster`.
@@ -178,3 +203,9 @@ credential files stay inaccessible. The probe substitutes a controlled process f
 interactive Codex, whose pinned executable is qualified during image building. These
 do not claim real-cluster or real-SSH qualification. CI runs the same suite
 on Ubuntu 24.04 and macOS with Python 3.9 and 3.14 for PRs and after merge to `master`.
+
+Credential scenarios exercise first login, cached reuse with a busy callback port,
+separate roots, shared aliases, overlapping refresh and stale-close ordering,
+interrupted atomic persistence, private permissions and malformed/symlink rejection.
+Linux CI also reads and updates the private auth copy inside the real SIF while
+checking that the saved credential store stays inaccessible.
