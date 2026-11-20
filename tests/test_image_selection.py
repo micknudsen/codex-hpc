@@ -69,12 +69,17 @@ elif "dpkg-query" in sys.argv: print("fixture=1")
 elif "-c" in sys.argv:
     probe = sys.argv[-1].replace("/usr/local/bin/codex", str(Path(__file__).with_name("codex")))
     raise SystemExit(subprocess.call([sys.executable, "-c", probe]))
+elif "/usr/local/bin/codex" in sys.argv:
+    command = [str(Path(__file__).with_name("codex")), *sys.argv[sys.argv.index("/usr/local/bin/codex") + 1:]]
+    raise SystemExit(subprocess.call(command))
 elif sys.argv[-1] == "--version": print("codex-cli 0.170.0")
 else: raise SystemExit("unexpected fixture runtime operation")
 ''')
         apptainer.chmod(0o755)
         codex = binary / "codex"
-        codex.write_text("#!" + sys.executable + '\nprint("codex-cli 0.170.0")\n')
+        codex.write_text("#!" + sys.executable + '\nimport sys\n'
+                        'if any(value.startswith("--invalid") for value in sys.argv): raise SystemExit(2)\n'
+                        'print("codex-cli 0.170.0")\n')
         codex.chmod(0o755)
         self.env = os.environ.copy()
         self.env.update(PATH=str(binary) + os.pathsep + self.env["PATH"],
@@ -121,6 +126,15 @@ else: raise SystemExit("unexpected fixture runtime operation")
         self.assertIn("compatibility", result.stderr)
         self.assertFalse(self.output.exists())
         self.assertEqual(self.image.read_bytes(), b"signed by trusted fixture publisher")
+
+    def test_incompatible_codex_arguments_are_not_hidden_by_mount_probe(self):
+        helper = self.source / "src/codex_hpc/remote_helper.py"
+        helper.write_text(helper.read_text().replace("--config=cli_auth_credentials_store",
+                                                    "--invalid-candidate-option"))
+        result = self.prepare()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("compatibility", result.stderr)
+        self.assertFalse(self.output.exists())
 
     def test_changed_or_incomplete_inputs_take_new_build_path(self):
         definition = self.source / "image/codex.def"

@@ -86,6 +86,9 @@ with tempfile.TemporaryDirectory(prefix="image-selection-") as temporary:
     original_helper = helper.read_text()
     helper.write_text('raise SystemExit("incompatible candidate helper")\n')
     prepare("incompatible-helper", succeeds=False)
+    helper.write_text(original_helper.replace("--config=cli_auth_credentials_store",
+                                               "--invalid-candidate-option"))
+    prepare("incompatible-codex-arguments", succeeds=False)
     helper.write_text(original_helper)
     print("PASS incompatible client/helper: no prepared output", flush=True)
 

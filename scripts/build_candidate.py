@@ -29,15 +29,18 @@ def write_json(path, value):
     path.write_text(json.dumps(value, sort_keys=True, indent=2) + "\n")
 
 
+def fingerprint(resolved):
+    return hashlib.sha256(json.dumps(resolved, sort_keys=True,
+                                    separators=(",", ":")).encode()).hexdigest()
+
+
 def inputs():
     lock = json.loads((REPO / "image/inputs.json").read_text())
     paths = sorted((REPO / "image").rglob("*")) + [Path(__file__).resolve(),
                                                      REPO / "scripts/install_apptainer_ci.sh"]
     files = {str(path.relative_to(REPO)): digest(path) for path in paths if path.is_file()}
     resolved = {"schema": 1, "inputs": lock, "files": files}
-    fingerprint = hashlib.sha256(json.dumps(resolved, sort_keys=True,
-                                           separators=(",", ":")).encode()).hexdigest()
-    return dict(resolved, fingerprint=fingerprint)
+    return dict(resolved, fingerprint=fingerprint(resolved))
 
 
 def run(*args, cwd=None, env=None):
@@ -128,7 +131,8 @@ def qualify_client(candidate, image):
         "schema": 1, "signed_image_sha256": actual_digest,
         "boundary": "installed setup and connect with controlled SSH/Slurm and actual Apptainer",
         "checks": ["cold-original-url", "warm-no-download", "signature-verification",
-                   "helper-launch", "codex-version", "workspace-write", "owned-job-cleanup"],
+                   "helper-launch", "generated-codex-command", "codex-version",
+                   "workspace-write", "owned-job-cleanup"],
     })
 
 
@@ -139,10 +143,8 @@ def prior_inputs(previous, current):
                     "build_tools_observed", "build_packages_observed", "base_package_versions",
                     "qualification_output"}
         resolved = {key: prior[key] for key in ("schema", "inputs", "files")}
-        fingerprint = hashlib.sha256(json.dumps(resolved, sort_keys=True,
-            separators=(",", ":")).encode()).hexdigest()
         if (not required.issubset(prior) or prior["schema"] != 1 or not prior["files"]
-                or fingerprint != prior["fingerprint"]):
+                or fingerprint(resolved) != prior["fingerprint"]):
             return None, "incomplete provenance"
         expected_tools = {name: prior["inputs"]["build_tools"][name]
                           for name in ("apptainer", "python", "squashfs_tools")}

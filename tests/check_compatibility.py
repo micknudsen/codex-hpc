@@ -24,6 +24,7 @@ class CandidateCompatibility(ComputeFixture):
         (credentials / "auth.json").write_text(json.dumps({"auth_mode": "apikey",
                                                           "OPENAI_API_KEY": "disposable-compatibility-key"}))
         (credentials / "auth.json").chmod(0o600)
+        self.env["VALIDATE_CODEX_COMMAND"] = "1"
         self.env["PROBE_MOUNTS"] = (
             "from pathlib import Path; import subprocess; "
             "print(subprocess.check_output(['/usr/local/bin/codex', '--version'], text=True).strip()); "
