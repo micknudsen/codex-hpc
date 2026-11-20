@@ -1,0 +1,13 @@
+---
+name: codex-hpc-release
+description: Prepare and publish a requested codex-hpc version through protected PRs, approved notes, verified release artifacts, and GitHub Releases. Use when asked to cut or resume a release.
+---
+
+# Release codex-hpc
+
+1. Read the [contribution policy](../../../.github/CONTRIBUTING.md), the [release decision](../../../docs/adr/0003-stop-setup-on-image-download-failure.md), the target milestone, and its specification. A target milestone is planning. Begin publication work for a concrete release request. Fetch tags and current `master`; inspect existing preparation PRs, tags, drafts, and published releases before creating anything.
+2. Check the requested semantic version and the merged, passing candidate commit. For v0.1.0, review the [MVP acceptance criteria](https://github.com/micknudsen/codex-hpc/issues/1), CLI tests, and representative cluster evidence. Report missing implementation, signing credentials, qualification, or packaging as a release blocker. A green workflow lint run is insufficient to qualify the product.
+3. Propose notes for the actual candidate, including requirements, changes, validation, and known limits. Obtain the maintainer's agreement to the notes before tagging or publishing. A changed release scope needs updated notes.
+4. Put release metadata and source changes through the same checked squash PR path. Follow the release tooling present at the target revision. Identify the exact source commit on protected `master` and its passing CI. Prepare the signed Linux x86-64 SIF, record its digest **after signing**, and ensure the matching client bundles its immutable GitHub Release URL, SHA-256 checksum, and trusted public key. Keep signing secrets out of version control and build logs.
+5. Tag the qualified commit with the requested version. Reuse an existing tag only if it identifies the intended commit. Stage the exact qualified artifacts in a draft GitHub Release with build inputs, definition, instructions, and provenance. Download the staged bytes to a fresh directory and check size, digest, and signature against the client metadata. Verify release identity, asset names and URLs, helper/client compatibility, and the versioned client deliverable. Run the documented end-to-end checks for that candidate.
+6. Publish the verified draft with the agreed notes. Confirm that the public tag resolves to the recorded commit and the published assets match the verified bytes. Close the milestone after its scope is delivered. Report the release URL, commit, CI evidence, artifact digest, and any outstanding limitation. Preserve published tags and assets when resuming interrupted work.
