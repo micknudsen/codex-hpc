@@ -10,6 +10,7 @@ import sys
 
 from . import allocation, signin
 from .transport import ssh_arguments
+from .lifetime import ReleaseLease
 
 
 def main():
@@ -108,28 +109,29 @@ def main():
                 return subprocess.run(ssh_arguments(args.host, command), input=helper, text=True,
                                       stdout=subprocess.PIPE)
 
-            result = remote("setup" if args.command == "setup" else "preflight", payload)
-            if args.command == "setup" or result.returncode:
+            if args.command == "setup":
+                result = remote("setup", payload)
                 print(result.stdout, end="", flush=True)
                 return result.returncode
-            ready = json.loads(result.stdout)
-            print("Workspace: " + ready["workspace"], flush=True)
-            print("Preflight passed.", flush=True)
-            if ready["needs_login"] and not args.device_auth:
-                signin.check_callback_port()
-            def launch(job_id, node, cluster):
-                request = dict(ready, job_id=job_id, node=node, cluster=cluster,
-                               cpus=resources["cpus"], release=payload["release"],
-                               device_auth=args.device_auth)
-                host = ready["user"] + "@" + node
-                authentication = shlex.join(["python3", ready["helper"], "--authenticate", json.dumps(request)])
-                signin.authenticate(ssh_arguments(host, authentication, jump_host=args.host, terminal=False),
-                                    host, args.host)
-                command = shlex.join(["python3", ready["helper"], "--compute", json.dumps(request)])
-                return subprocess.run(ssh_arguments(
-                    host, command, jump_host=args.host)).returncode
+            with ReleaseLease(args.host, helper, payload) as lease:
+                ready = lease.ready
+                print("Workspace: " + ready["workspace"], flush=True)
+                print("Preflight passed.", flush=True)
+                if ready["needs_login"] and not args.device_auth:
+                    signin.check_callback_port()
+                def launch(job_id, node, cluster):
+                    request = dict(ready, job_id=job_id, node=node, cluster=cluster,
+                                   cpus=resources["cpus"], release=payload["release"],
+                                   device_auth=args.device_auth)
+                    host = ready["user"] + "@" + node
+                    authentication = shlex.join(["python3", ready["helper"], "--authenticate", json.dumps(request)])
+                    signin.authenticate(ssh_arguments(host, authentication, jump_host=args.host, terminal=False),
+                                        host, args.host)
+                    command = shlex.join(["python3", ready["helper"], "--compute", json.dumps(request)])
+                    return subprocess.run(ssh_arguments(
+                        host, command, jump_host=args.host)).returncode
 
-            return allocation.connect(args.host, remote, resources, launch)
+                return allocation.connect(args.host, lease.remote, resources, launch)
         except (OSError, ValueError) as error:
             print("codex-hpc: " + args.command + " failed: " + str(error), file=sys.stderr)
             return 1

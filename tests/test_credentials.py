@@ -59,6 +59,7 @@ print("cached login reused")
         self.codex('assert json.loads(auth.read_text()) == ' + repr(self.auth) + '\n')
         # A cached login cannot depend on owning the browser callback port.
         with socket.socket() as busy:
+            busy.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             busy.bind(("127.0.0.1", 1455))
             busy.listen()
             result = self.connect("--host", "another-alias")

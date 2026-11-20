@@ -82,7 +82,11 @@ with open(os.environ["SCHEDULER_LOG"], "a") as log:
 
     def scheduler_events(self):
         path = Path(self.env["SCHEDULER_LOG"])
-        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+        events = [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+        # These assertions cover allocation polling/submission/cancellation. The
+        # release collector additionally makes read-only marker inspections.
+        return [event for event in events if not (event["tool"] == "squeue" and any(
+            arg.startswith("--name=") for arg in event["args"]))]
 
 
 class AllocationCLI(AllocationFixture):
@@ -193,8 +197,13 @@ class AllocationCLI(AllocationFixture):
 import shutil, sys
 original = shutil.which
 shutil.which = lambda name: None if name == "scancel" else original(name)
-sys.argv.pop(1)
-exec(compile(sys.stdin.read(), "<remote>", "exec"))
+if sys.argv[1] == "-c":
+    code = sys.argv[2]
+    sys.argv = ["-c", *sys.argv[3:]]
+else:
+    sys.argv.pop(1)
+    code = sys.stdin.read()
+exec(compile(code, "<remote>", "exec"))
 ''')
         result = self.connect()
         self.assertNotEqual(result.returncode, 0)

@@ -17,6 +17,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import uuid
 
 
 def digest(path):
@@ -70,10 +71,11 @@ def installation_identity(release, image):
     return encoded, installation, identity
 
 
-def prepare_image(image, release, key):
+def prepare_image(image, release, key, cache):
     images = image.parent
     if image.exists():
         verify(image, release, key)
+        register_image(cache, image)
         return image
     if shutil.disk_usage(images).free < release["image"]["size"] + 1024 * 1024:
         raise ValueError("insufficient free space for image download at " + str(images))
@@ -88,8 +90,248 @@ def prepare_image(image, release, key):
                              result.stderr.strip())
         verify(partial, release, key)
         partial.chmod(0o444)
+        register_image(cache, image)
         os.replace(partial, image)
     return image
+
+
+def atomic_json(path, document):
+    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as stream:
+        temporary = Path(stream.name)
+        try:
+            json.dump(document, stream, sort_keys=True)
+            stream.flush()
+            os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+def registry(path):
+    if not path.exists() and not path.is_symlink():
+        return {}
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("managed registry is not a regular file: " + str(path))
+    document = json.loads(path.read_text())
+    if not isinstance(document, dict):
+        raise ValueError("invalid managed registry: " + str(path))
+    return document
+
+
+def managed_caches(roots):
+    records = registry(roots["data"] / ".managed-caches.json")
+    if any(not Path(path).is_absolute() or owned is not True for path, owned in records.items()):
+        raise ValueError("invalid managed cache ownership")
+    return {roots["cache"], *(Path(path) for path in records)}
+
+
+@contextmanager
+def installation_locks(roots):
+    # Recheck after locking: another setup may have added a cache while we waited.
+    while True:
+        caches = managed_caches(roots)
+        with ExitStack() as locks:
+            for root in sorted({roots["data"], *(cache for cache in caches if cache.exists())}):
+                if root.resolve() != root:
+                    raise ValueError("managed root resolves differently: " + str(root))
+                lock = locks.enter_context((root / ".setup.lock").open("a"))
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            if not managed_caches(roots).issubset(caches):
+                continue
+            yield
+            return
+
+
+def managed_releases(data):
+    # Positive ownership survives an interrupted rmtree, unlike an in-directory marker.
+    records = registry(data / ".managed-releases.json")
+    if any(not re.fullmatch(r"[0-9a-f]{64}", identity) or not isinstance(image, str)
+           for identity, image in records.items()):
+        raise ValueError("invalid managed release ownership at " + str(data))
+    return {data / "releases" / identity: Path(image) for identity, image in records.items()}
+
+
+def pin_in_use(pin):
+    lock_path = pin / "lock"
+    if pin.is_symlink() or lock_path.is_symlink() or not lock_path.is_file():
+        return True
+    with lock_path.open("r+") as lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        state_path = pin / "state.json"
+        if not state_path.is_file() or state_path.is_symlink():
+            raise ValueError("cannot inspect lease submission state: " + str(pin))
+        state = registry(state_path)
+        if not state:
+            return False  # No submission was started.
+        if (not isinstance(state.get("marker"), str)
+                or not re.fullmatch(r"codex-hpc-[0-9a-f]{32}", state["marker"])
+                or not isinstance(state.get("uncertain"), bool)
+                or not isinstance(state.get("cluster", []), list)
+                or any(not isinstance(value, str) or not re.fullmatch(
+                    r"--clusters=[A-Za-z0-9_.-]+", value) for value in state.get("cluster", []))):
+            raise ValueError("invalid lease submission state: " + str(pin))
+        arguments = ["squeue", *state.get("cluster", []), "--noheader", "--states=all", "--local",
+                     "--name=" + state["marker"], "--format=%i|%j|%T"]
+        try:
+            result = scheduler(arguments)
+        except OSError:
+            return True
+        if result.returncode:
+            return True
+        for line in result.stdout.splitlines():
+            fields = line.split("|")
+            if len(fields) < 3:
+                return True
+            if fields[1] == state["marker"]:
+                if state.get("uncertain"):
+                    state["uncertain"] = False
+                    atomic_json(pin / "state.json", state)
+                if fields[2] not in (
+                        "COMPLETED", "CANCELLED", "FAILED", "TIMEOUT", "NODE_FAIL", "OUT_OF_MEMORY",
+                        "PREEMPTED", "BOOT_FAIL", "DEADLINE"):
+                    return True
+        # A lost response before any scheduler acknowledgement is ambiguous, not
+        # proof that a still-in-flight submission cannot subsequently create a job.
+        return state.get("uncertain", False)
+
+
+def collect_releases(roots):
+    # The caller holds the data/cache locks. Unregistered paths are never collected.
+    releases = managed_releases(roots["data"])
+    retained = {(roots["data"] / "current").resolve()}
+    for pin in (roots["data"] / ".leases").glob("*"):
+        owner = pin / "owner"
+        if (pin.is_symlink() or not owner.is_file() or owner.is_symlink()
+                or owner.read_text() != "codex-hpc-lease-v1"):
+            continue
+        record = registry(pin / "release.json")
+        if record.get("schema") != 1 or record.get("identity") not in (
+                target.name for target in releases):
+            raise ValueError("cannot establish release ownership for lease " + str(pin))
+        if pin_in_use(pin):
+            retained.add(roots["data"] / "releases" / record["identity"])
+        else:
+            shutil.rmtree(pin)
+    for target in list(releases):
+        if target not in retained:
+            if target.is_symlink():
+                raise ValueError("refusing to collect redirected managed release: " + str(target))
+            if target.exists():
+                shutil.rmtree(target)
+            del releases[target]
+    atomic_json(roots["data"] / ".managed-releases.json",
+                {target.name: str(image) for target, image in releases.items()})
+    collect_images(roots)
+
+
+def cleanup_releases(roots):
+    try:
+        collect_releases(roots)
+    except (OSError, ValueError) as error:
+        print("codex-hpc: release cleanup deferred; rerun setup: " + str(error), file=sys.stderr)
+
+
+
+def register_image(cache, image):
+    images = registry(cache / ".managed-images.json")
+    images[str(image.relative_to(cache / "images"))] = True
+    atomic_json(cache / ".managed-images.json", images)
+
+
+def register_cache(roots):
+    caches = managed_caches(roots)
+    atomic_json(roots["data"] / ".managed-caches.json", {str(cache): True for cache in caches})
+    owners = roots["cache"] / ".owners"
+    owners.mkdir(exist_ok=True, mode=0o700)
+    identity = hashlib.sha256(str(roots["data"]).encode()).hexdigest()
+    atomic_json(owners / (identity + ".json"), {"schema": 1, "data": str(roots["data"])})
+
+
+def register_release(roots, target, image):
+    records = registry(roots["data"] / ".managed-releases.json")
+    records[target.name] = str(image)
+    atomic_json(roots["data"] / ".managed-releases.json", records)
+
+
+def collect_images(roots):
+    for cache in managed_caches(roots):
+        if not cache.exists():
+            continue
+        records = registry(cache / ".managed-images.json")
+        referenced = set()
+        for owner in (cache / ".owners").glob("*.json"):
+            record = registry(owner)
+            if record.get("schema") != 1 or not isinstance(record.get("data"), str):
+                continue
+            data = Path(record["data"])
+            identity = hashlib.sha256(str(data).encode()).hexdigest()
+            if not data.is_absolute() or owner.name != identity + ".json":
+                continue
+            if data.resolve() != data:
+                raise ValueError("cache owner root resolves differently: " + str(data))
+            referenced.update(managed_releases(data).values())
+        for name, owned in list(records.items()):
+            if owned is not True or not re.fullmatch(r"linux-amd64/[0-9a-f]{64}\.sif", name):
+                raise ValueError("invalid managed image ownership at " + str(cache))
+            image = cache / "images" / name
+            if image not in referenced:
+                if image.is_symlink():
+                    raise ValueError("refusing to collect redirected managed image: " + str(image))
+                image.unlink(missing_ok=True)
+                del records[name]
+        atomic_json(cache / ".managed-images.json", records)
+
+def release_lease(payload):
+    os.umask(0o077)
+    roots = {name: Path(path).resolve() for name, path in payload["roots"].items()}
+    if not roots["data"].is_dir() or not roots["cache"].is_dir():
+        preflight(payload)  # Preserve the exact setup recovery diagnostic.
+    pin = None
+    lock = None
+    try:
+        with installation_locks(roots):
+            ready = preflight(payload)
+            leases = roots["data"] / ".leases"
+            leases.mkdir(exist_ok=True, mode=0o700)
+            pin = leases / uuid.uuid4().hex
+            pin.mkdir(mode=0o700)
+            (pin / "owner").write_text("codex-hpc-lease-v1")
+            lock = (pin / "lock").open("w+")
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            atomic_json(pin / "release.json", {"schema": 1,
+                        "identity": Path(ready["helper"]).parent.name})
+            state = {}
+            atomic_json(pin / "state.json", state)
+        print(json.dumps(ready), flush=True)
+        for line in sys.stdin:
+            request = json.loads(line)
+            if request["operation"] != "slurm":
+                raise ValueError("unsupported release lease operation")
+            arguments = request["arguments"]
+            if arguments[0] == "sbatch":
+                state = {"marker": next(arg.split("=", 1)[1] for arg in arguments
+                                        if arg.startswith("--job-name=")), "uncertain": True}
+                atomic_json(pin / "state.json", state)
+            result = scheduler(arguments)
+            if arguments[0] == "sbatch":
+                identity = re.fullmatch(r"([1-9][0-9]*)(?:;([A-Za-z0-9_.-]+))?", result.stdout.strip())
+                if identity:
+                    state.update(uncertain=False, cluster=["--clusters=" + identity.group(2)]
+                                 if identity.group(2) else [])
+                    atomic_json(pin / "state.json", state)
+            print(json.dumps({"returncode": result.returncode, "stdout": result.stdout,
+                              "stderr": result.stderr}), flush=True)
+    finally:
+        if lock is not None:
+            lock.close()
+            try:
+                with installation_locks(roots):
+                    cleanup_releases(roots)
+            except (OSError, ValueError) as error:
+                print("codex-hpc: release cleanup deferred; rerun setup: " + str(error), file=sys.stderr)
 
 
 def setup(payload):
@@ -109,10 +351,7 @@ def setup(payload):
     for tool in ("curl", "apptainer"):
         if shutil.which(tool) is None:
             raise ValueError("required login-host tool is missing: " + tool)
-    with ExitStack() as locks:
-        for root in sorted({roots["data"], roots["cache"]}):
-            lock = locks.enter_context((root / ".setup.lock").open("a"))
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+    with installation_locks(roots):
         releases = roots["data"] / "releases"
         releases.mkdir(exist_ok=True)
         recover_staging(releases, ".setup-")
@@ -136,7 +375,8 @@ def setup(payload):
             helper.write_text(payload["helper"])
             if digest(key) != release["trust"]["sha256"] or digest(helper) != release["helper_sha256"]:
                 raise ValueError("bundled helper or public key checksum mismatch")
-            prepare_image(image, release, key)
+            register_cache(roots)
+            prepare_image(image, release, key, roots["cache"])
             (stage / "release.json").write_text(encoded)
             (stage / "installation.json").write_text(installation)
             target = releases / identity
@@ -148,7 +388,8 @@ def setup(payload):
                         for name in expected_files):
                     raise ValueError("installed release is damaged at " + str(target) +
                                      "; preserve any running sessions before removing it and retrying setup")
-            else:
+            register_release(roots, target, image)
+            if not target.exists():
                 # Keep TemporaryDirectory's own directory alive until its exit.
                 ready = stage / "ready"
                 ready.mkdir()
@@ -161,6 +402,7 @@ def setup(payload):
             pointer = stage / "current"
             pointer.symlink_to(target.relative_to(roots["data"]))
             os.replace(pointer, current)
+        cleanup_releases(roots)
     print("Release " + release["version"] + " ready at " + str(target))
 
 
@@ -450,12 +692,12 @@ def execute(payload):
             credentials.persist(auth, initial)
 
 
-def slurm(arguments):
+def scheduler(arguments):
     if arguments == ["check"]:
         for tool in ("sbatch", "squeue", "scancel"):
             if shutil.which(tool) is None:
                 raise ValueError("required login-host tool is missing: " + tool)
-        return
+        return subprocess.CompletedProcess(arguments, 0, "", "")
     if arguments[0] not in ("sbatch", "squeue", "scancel"):
         raise ValueError("unsupported scheduler operation")
     # Ambient Slurm command options must not change the displayed request, add an
@@ -463,7 +705,7 @@ def slurm(arguments):
     environment = {key: value for key, value in os.environ.items()
                    if not key.startswith(("SBATCH_", "SQUEUE_", "SCANCEL_"))
                    and key != "SLURM_CLUSTERS"}
-    os.execvpe(arguments[0], arguments, environment)
+    return subprocess.run(arguments, capture_output=True, text=True, env=environment)
 
 
 def main():
@@ -479,6 +721,8 @@ def main():
     commands.add_argument("--setup", help=argparse.SUPPRESS)
     commands.add_argument("--preflight", help=argparse.SUPPRESS)
     commands.add_argument("--slurm", help=argparse.SUPPRESS)
+    commands.add_argument("--lease", help=argparse.SUPPRESS)
+    commands.add_argument("--collect", help=argparse.SUPPRESS)
     commands.add_argument("--compute", help=argparse.SUPPRESS)
     commands.add_argument("--execute", help=argparse.SUPPRESS)
     commands.add_argument("--authenticate", help=argparse.SUPPRESS)
@@ -490,7 +734,18 @@ def main():
     elif args.setup:
         setup(json.loads(args.setup))
     elif args.slurm:
-        slurm(json.loads(args.slurm))
+        result = scheduler(json.loads(args.slurm))
+        print(result.stdout, end="")
+        print(result.stderr, end="", file=sys.stderr)
+        return result.returncode
+    elif args.lease:
+        request = json.loads(args.lease)
+        request["helper"] = _bootstrap_source
+        release_lease(request)
+    elif args.collect:
+        roots = {name: Path(path).resolve() for name, path in json.loads(args.collect).items()}
+        with installation_locks(roots):
+            cleanup_releases(roots)
     elif args.compute:
         return compute(json.loads(args.compute))
     elif args.authenticate:

@@ -68,6 +68,10 @@ if os.environ.get("NODE_STAGE"):
 sys.argv.pop(0)
 if sys.argv[0] == "-":
     exec(compile(sys.stdin.read(), "<remote>", "exec"))
+elif sys.argv[0] == "-c":
+    code = sys.argv[1]
+    sys.argv = ["-c", *sys.argv[2:]]
+    exec(compile(code, "<remote>", "exec"))
 else:
     runpy.run_path(sys.argv[0], run_name="__main__")
 ''')
