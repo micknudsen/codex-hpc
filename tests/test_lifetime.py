@@ -258,3 +258,68 @@ os.rmdir = interrupted_removal
         result = self.setup()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(old.exists(), "partially removed release lost its managed ownership")
+
+    def test_failed_ownership_registration_preserves_previous_activation(self):
+        previous = self.snapshot()
+        new_cache = self.home / "failed-image-cache"
+        self.env["CODEX_HPC_CACHE_ROOT"] = str(new_cache)
+        interpreter = (self.bin / "python3").read_text()
+        inject = '''
+original_replace = os.replace
+def fail_registration(source, destination, *args, **kwargs):
+    if str(destination).endswith(".managed-images.json"):
+        raise OSError("simulated ownership quota failure")
+    return original_replace(source, destination, *args, **kwargs)
+os.replace = fail_registration
+'''
+        (self.bin / "python3").write_text(interpreter.replace("sys.argv.pop(0)", inject + "\nsys.argv.pop(0)"))
+        self.release["version"] = "0.2.0"
+        self.save_release()
+        result = self.setup()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ownership quota failure", result.stderr)
+        self.assertEqual(self.snapshot(), previous)
+        self.assertEqual(list(new_cache.rglob("*.sif")), [], "image was published before ownership")
+        (self.bin / "python3").write_text(interpreter)
+        result = self.setup()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotEqual(self.snapshot()[0], previous[0])
+
+    def test_failed_release_registration_never_publishes_unowned_helper(self):
+        previous = self.snapshot()
+        targets = set((self.data / "releases").iterdir())
+        interpreter = (self.bin / "python3").read_text()
+        inject = '''
+original_replace = os.replace
+def fail_registration(source, destination, *args, **kwargs):
+    if str(destination).endswith(".managed-releases.json"):
+        raise OSError("simulated release registration failure")
+    return original_replace(source, destination, *args, **kwargs)
+os.replace = fail_registration
+'''
+        (self.bin / "python3").write_text(interpreter.replace("sys.argv.pop(0)", inject + "\nsys.argv.pop(0)"))
+        self.release["version"] = "0.2.0"
+        self.save_release()
+        result = self.setup()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(set((self.data / "releases").iterdir()), targets)
+        self.assertEqual(self.snapshot(), previous)
+        (self.bin / "python3").write_text(interpreter)
+        self.release["version"] = "0.3.0"
+        self.save_release()
+        self.assertEqual(self.setup().returncode, 0)
+        self.assertEqual([path.resolve() for path in (self.data / "releases").iterdir()],
+                         [(self.data / "current").resolve()])
+
+    def test_terminal_observation_resolves_uncertain_submission(self):
+        old = (self.data / "current").resolve()
+        state = self.root / "scheduler-state"
+        state.write_text("COMPLETED")
+        self.env.update(LOST_RESPONSE="1", STATE_FILE=str(state))
+        result = self.connect()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("response was lost", result.stderr)
+        self.release["version"] = "0.2.0"
+        self.save_release()
+        self.assertEqual(self.setup().returncode, 0)
+        self.assertFalse(old.exists(), "positively completed job was kept as an unknown submission")

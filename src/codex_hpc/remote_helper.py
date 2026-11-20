@@ -71,10 +71,11 @@ def installation_identity(release, image):
     return encoded, installation, identity
 
 
-def prepare_image(image, release, key):
+def prepare_image(image, release, key, cache):
     images = image.parent
     if image.exists():
         verify(image, release, key)
+        register_image(cache, image)
         return image
     if shutil.disk_usage(images).free < release["image"]["size"] + 1024 * 1024:
         raise ValueError("insufficient free space for image download at " + str(images))
@@ -89,6 +90,7 @@ def prepare_image(image, release, key):
                              result.stderr.strip())
         verify(partial, release, key)
         partial.chmod(0o444)
+        register_image(cache, image)
         os.replace(partial, image)
     return image
 
@@ -183,13 +185,14 @@ def pin_in_use(pin):
             fields = line.split("|")
             if len(fields) < 3:
                 return True
-            if fields[1] == state["marker"] and fields[2] not in (
-                    "COMPLETED", "CANCELLED", "FAILED", "TIMEOUT", "NODE_FAIL", "OUT_OF_MEMORY",
-                    "PREEMPTED", "BOOT_FAIL", "DEADLINE"):
+            if fields[1] == state["marker"]:
                 if state.get("uncertain"):
                     state["uncertain"] = False
                     atomic_json(pin / "state.json", state)
-                return True
+                if fields[2] not in (
+                        "COMPLETED", "CANCELLED", "FAILED", "TIMEOUT", "NODE_FAIL", "OUT_OF_MEMORY",
+                        "PREEMPTED", "BOOT_FAIL", "DEADLINE"):
+                    return True
         # A lost response before any scheduler acknowledgement is ambiguous, not
         # proof that a still-in-flight submission cannot subsequently create a job.
         return state.get("uncertain", False)
@@ -232,19 +235,25 @@ def cleanup_releases(roots):
 
 
 
-def register_release(roots, target, image):
-    records = registry(roots["data"] / ".managed-releases.json")
-    records[target.name] = str(image)
-    atomic_json(roots["data"] / ".managed-releases.json", records)
+def register_image(cache, image):
+    images = registry(cache / ".managed-images.json")
+    images[str(image.relative_to(cache / "images"))] = True
+    atomic_json(cache / ".managed-images.json", images)
+
+
+def register_cache(roots):
     caches = managed_caches(roots)
     atomic_json(roots["data"] / ".managed-caches.json", {str(cache): True for cache in caches})
-    images = registry(roots["cache"] / ".managed-images.json")
-    images[str(image.relative_to(roots["cache"] / "images"))] = True
-    atomic_json(roots["cache"] / ".managed-images.json", images)
     owners = roots["cache"] / ".owners"
     owners.mkdir(exist_ok=True, mode=0o700)
     identity = hashlib.sha256(str(roots["data"]).encode()).hexdigest()
     atomic_json(owners / (identity + ".json"), {"schema": 1, "data": str(roots["data"])})
+
+
+def register_release(roots, target, image):
+    records = registry(roots["data"] / ".managed-releases.json")
+    records[target.name] = str(image)
+    atomic_json(roots["data"] / ".managed-releases.json", records)
 
 
 def collect_images(roots):
@@ -366,7 +375,8 @@ def setup(payload):
             helper.write_text(payload["helper"])
             if digest(key) != release["trust"]["sha256"] or digest(helper) != release["helper_sha256"]:
                 raise ValueError("bundled helper or public key checksum mismatch")
-            prepare_image(image, release, key)
+            register_cache(roots)
+            prepare_image(image, release, key, roots["cache"])
             (stage / "release.json").write_text(encoded)
             (stage / "installation.json").write_text(installation)
             target = releases / identity
@@ -378,7 +388,8 @@ def setup(payload):
                         for name in expected_files):
                     raise ValueError("installed release is damaged at " + str(target) +
                                      "; preserve any running sessions before removing it and retrying setup")
-            else:
+            register_release(roots, target, image)
+            if not target.exists():
                 # Keep TemporaryDirectory's own directory alive until its exit.
                 ready = stage / "ready"
                 ready.mkdir()
@@ -391,7 +402,6 @@ def setup(payload):
             pointer = stage / "current"
             pointer.symlink_to(target.relative_to(roots["data"]))
             os.replace(pointer, current)
-            register_release(roots, target, image)
         cleanup_releases(roots)
     print("Release " + release["version"] + " ready at " + str(target))
 
