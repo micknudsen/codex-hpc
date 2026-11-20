@@ -52,8 +52,20 @@ def staging(parent, prefix):
         yield directory
 
 
-def prepare_image(images, release, key):
-    image = images / (release["image"]["sha256"] + ".sif")
+def image_location(cache, release):
+    metadata = release["image"]
+    return cache / "images" / metadata["architecture"].replace("/", "-") / (metadata["sha256"] + ".sif")
+
+
+def installation_identity(release, image):
+    encoded = json.dumps(release, sort_keys=True)
+    installation = json.dumps({"image": str(image)})
+    identity = hashlib.sha256((encoded + installation).encode()).hexdigest()
+    return encoded, installation, identity
+
+
+def prepare_image(image, release, key):
+    images = image.parent
     if image.exists():
         verify(image, release, key)
         return image
@@ -98,7 +110,8 @@ def setup(payload):
         releases = roots["data"] / "releases"
         releases.mkdir(exist_ok=True)
         recover_staging(releases, ".setup-")
-        images = roots["cache"] / "images" / image_metadata["architecture"].replace("/", "-")
+        image = image_location(roots["cache"], release)
+        images = image.parent
         images.mkdir(parents=True, exist_ok=True)
         recover_staging(images, ".download-")
         for name, root in roots.items():
@@ -109,7 +122,7 @@ def setup(payload):
                 raise ValueError(name + " root is not writable: " + str(root) + ": " + str(error))
         if shutil.disk_usage(releases).free < 1024 * 1024:
             raise ValueError("insufficient free space for release staging at " + str(releases))
-        encoded = json.dumps(release, sort_keys=True)
+        encoded, installation, identity = installation_identity(release, image)
         with staging(releases, ".setup-") as stage:
             key = stage / "trusted.pem"
             key.write_text(payload["key"])
@@ -117,11 +130,9 @@ def setup(payload):
             helper.write_text(payload["helper"])
             if digest(key) != release["trust"]["sha256"] or digest(helper) != release["helper_sha256"]:
                 raise ValueError("bundled helper or public key checksum mismatch")
-            image = prepare_image(images, release, key)
+            prepare_image(image, release, key)
             (stage / "release.json").write_text(encoded)
-            installation = json.dumps({"image": str(image)})
             (stage / "installation.json").write_text(installation)
-            identity = hashlib.sha256((encoded + installation).encode()).hexdigest()
             target = releases / identity
             if target.exists():
                 expected_files = ("helper.py", "trusted.pem", "release.json", "installation.json")
@@ -192,12 +203,16 @@ def preflight(payload):
     print("Workspace: " + str(workspace), flush=True)
     roots = {name: Path(path).resolve() for name, path in payload["roots"].items()}
     release = payload["release"]
-    image = roots["cache"] / "images/linux-amd64" / (release["image"]["sha256"] + ".sif")
-    encoded = json.dumps(release, sort_keys=True)
-    installation = json.dumps({"image": str(image)})
-    identity = hashlib.sha256((encoded + installation).encode()).hexdigest()
+    image = image_location(roots["cache"], release)
+    encoded, installation, identity = installation_identity(release, image)
     target = roots["data"] / "releases" / identity
-    protected = dict(roots, helper=target.resolve(), image=image.resolve())
+    protected = dict(roots)
+    for name, path in (("helper", target), ("image", image)):
+        try:
+            protected[name] = path.resolve()
+        except (OSError, RuntimeError) as error:
+            raise ValueError("matching release is not ready; cannot resolve " + name + " " +
+                             str(path) + ": " + str(error) + "\nRun: " + payload["setup_command"])
     check_workspace_isolation(workspace, protected)
     expected = {"helper.py": payload["helper"], "trusted.pem": payload["key"],
                 "release.json": encoded, "installation.json": installation}

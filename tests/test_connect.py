@@ -178,3 +178,18 @@ raise SystemExit(1)
                     finally:
                         path.write_bytes(original)
         self.assertEqual(self.events(), ["fetch " + self.release["image"]["url"], "verify"])
+
+    def test_cyclic_managed_image_is_an_actionable_installation_error(self):
+        workspace = self.home / "workspace"
+        workspace.mkdir()
+        self.assertEqual(self.setup().returncode, 0)
+        image = next(self.cache.rglob("*.sif"))
+        image.unlink()
+        image.symlink_to(image.name)
+        result = self.connect(workspace)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("matching release is not ready", result.stderr)
+        self.assertIn(image.name, result.stderr)
+        self.assertIn("Run: codex-hpc setup", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertEqual(self.events(), ["fetch " + self.release["image"]["url"], "verify"])
