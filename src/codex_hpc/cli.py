@@ -7,6 +7,8 @@ import shlex
 import subprocess
 import sys
 
+from . import allocation
+
 
 def ssh_arguments(host, command):
     return ["ssh", "-T", "-o", "ForwardAgent=no", "-o", "ForwardX11=no", "--", host, command]
@@ -33,7 +35,20 @@ def main():
                                    help="Remote absolute path or '~/path' (" + variable + ").")
         if command == "connect":
             subparser.add_argument("workspace", help="Existing absolute remote path or quoted '~/project'.")
+            for name, default in (("cpus", "2"), ("mem", "4G"), ("time", "02:00:00"),
+                                  ("account", None), ("partition", None)):
+                variable = "CODEX_HPC_" + name.upper()
+                subparser.add_argument("--" + name, default=os.environ.get(variable, default),
+                                      help="Slurm " + name + " (" + variable + "; default: " +
+                                      (default or "Slurm choice") + ").")
     args = parser.parse_args()
+    if args.command == "connect":
+        resources = {name: getattr(args, name) for name in ("cpus", "mem", "time", "account", "partition")}
+        for name, value in resources.items():
+            if value is not None and (not value or any(ord(char) < 32 or ord(char) == 127 for char in value)):
+                parser.error("--" + name + " must be a nonempty Slurm value without control characters")
+        if not args.cpus.isdecimal() or int(args.cpus) < 1:
+            parser.error("--cpus must be a positive integer")
     if not args.host:
         parser.error("set --host or CODEX_HPC_HOST to an SSH destination")
     if args.host.startswith("-") or any(char.isspace() or ord(char) < 32 or ord(char) == 127
@@ -83,11 +98,19 @@ def main():
                 for name, path in roots.items():
                     recovery.extend(["--" + name + "-root", path])
                 payload["setup_command"] = shlex.join(recovery)
-            operation = "setup" if args.command == "setup" else "preflight"
-            command = "python3 - --" + operation + " " + shlex.quote(json.dumps(payload))
-            return subprocess.run(
-                ssh_arguments(args.host, command),
-                input=helper, text=True).returncode
+            def remote(operation, request):
+                command = "python3 - --" + operation + " " + shlex.quote(json.dumps(request))
+                return subprocess.run(ssh_arguments(args.host, command), input=helper, text=True,
+                                      stdout=subprocess.PIPE)
+
+            result = remote("setup" if args.command == "setup" else "preflight", payload)
+            if args.command == "setup" or result.returncode:
+                print(result.stdout, end="", flush=True)
+                return result.returncode
+            ready = json.loads(result.stdout)
+            print("Workspace: " + ready["workspace"], flush=True)
+            print("Preflight passed.", flush=True)
+            return allocation.connect(args.host, remote, resources)
         except (OSError, ValueError) as error:
             print("codex-hpc: " + args.command + " failed: " + str(error), file=sys.stderr)
             return 1
