@@ -14,8 +14,8 @@ verification and atomic activation. A source-only install has no release bundle;
 it reports discovered paths and exits nonzero. `connect` validates its workspace
 and installed release, submits and monitors one owned allocation, and launches
 interactive Codex on its assigned node. Setup never submits a job. Managed
-credentials are shared within the selected state root. Browser forwarding is still
-being implemented; this candidate does not yet provide the complete first-sign-in workflow.
+credentials are shared within the selected state root. First sign-in uses a local
+browser callback forwarded to the allocated node; device-code sign-in is opt-in.
 
 Install from this checkout with Python 3.9 or later:
 
@@ -153,8 +153,35 @@ This follows the pinned Codex 0.170.0
 [auth document](https://github.com/openai/codex/blob/rust-v0.170.0/codex-rs/login/src/auth/storage.rs)
 and [file-store setting](https://github.com/openai/codex/blob/rust-v0.170.0/codex-rs/config/src/types.rs).
 Tests use disposable credential documents and a controlled Codex process; they
-do not authenticate a production account. Browser/device sign-in orchestration
-is a separate implementation issue.
+do not authenticate a production account.
+
+## First sign-in
+
+When the state root has no saved login, browser mode checks local port 1455 before
+submitting a job. A conflict identifies the port and asks you to free it and rerun
+`connect`. A cached login does not need the port. Once allocated, a short sign-in
+step checks Codex's login status on the compute node. The login host only verifies
+the image; it does not run Codex.
+
+When sign-in is needed, the client confirms an owned SSH callback tunnel through
+the same jump host before opening your local browser. If browser launch fails,
+open the printed URL on the same computer; the tunnel and allocation remain open.
+The tunnel closes immediately after sign-in, before the interactive step starts,
+and on failure or cancellation. Both steps use the same allocation. The saved
+login is committed using the same concurrent-session rules described above; the
+interactive step reads the latest saved login. No tokens or login codes are kept
+in client logs, and node login logs stay in the private temporary home.
+
+Use `codex-hpc connect '~/project' --host my-cluster --device-auth` to explicitly
+select device-code sign-in. There is no automatic fallback to device codes.
+Device mode prints Codex's URL/code and does not create a callback tunnel.
+
+Pinned Codex 0.170.0 uses port 1455, with 1457 as its node-side fallback. The client
+forwards the callback port from the emitted sign-in URL; a newly busy local port
+after queueing stops startup and releases the owned job. This follows the pinned
+[login commands](https://github.com/openai/codex/blob/rust-v0.170.0/codex-rs/cli/src/main.rs)
+and [callback server](https://github.com/openai/codex/blob/rust-v0.170.0/codex-rs/login/src/server.rs).
+Actual OAuth and site SSH forwarding are still part of real-cluster qualification.
 
 ## Remote setup
 
@@ -209,3 +236,9 @@ separate roots, shared aliases, overlapping refresh and stale-close ordering,
 interrupted atomic persistence, private permissions and malformed/symlink rejection.
 Linux CI also reads and updates the private auth copy inside the real SIF while
 checking that the saved credential store stays inaccessible.
+
+Sign-in scenarios use disposable login/browser/SSH peers and real loopback binds.
+They cover prequeue and late port conflicts, confirmed-tunnel ordering, manual URL
+fallback, cached and explicit device flows, failed sign-in, cancellation, unrelated
+connection survival, and a newer credential saved during authentication. CI repeats
+these through packaged connect with real signed-image verification.

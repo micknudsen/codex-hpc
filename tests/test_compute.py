@@ -79,6 +79,10 @@ if sys.argv[1] == "verify":
 if "--help" in sys.argv:
     print("" if os.environ.get("MISSING_CAPABILITY") else "--cleanenv --containall --no-mount --home --mount --pwd --env --workdir")
     raise SystemExit(0)
+if sys.argv[-2:] == ["login", "status"]:
+    # Compute/credential scenarios control an already authenticated Codex;
+    # first-login behavior is exercised separately by test_signin.py.
+    raise SystemExit(0)
 with open(os.environ["COMPUTE_LOG"], "a") as log:
     log.write(json.dumps({"apptainer": sys.argv[1:], "job": os.environ.get("SLURM_JOB_ID"),
                          "step": os.environ.get("SLURM_STEP_ID"), "pid": os.getpid(),
@@ -112,7 +116,7 @@ class ComputeCLI(ComputeFixture):
         self.assertEqual(result.returncode, 7, result.stderr)
         self.assertIn("controlled Codex session", result.stdout)
         events = self.compute_events()
-        ssh, step, container = events
+        ssh, step, container = events[-3:]
         self.assertIn("-tt", ssh["ssh"])
         self.assertEqual(ssh["ssh"][ssh["ssh"].index("-J") + 1], "test-login")
         self.assertTrue(ssh["ssh"][-2].endswith("@node01"))

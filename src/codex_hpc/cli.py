@@ -8,11 +8,11 @@ import signal
 import subprocess
 import sys
 
-from . import allocation
+from . import allocation, signin
 
 
-def ssh_arguments(host, command, jump_host=None):
-    arguments = ["ssh", "-tt" if jump_host else "-T", "-o", "ForwardAgent=no", "-o", "ForwardX11=no"]
+def ssh_arguments(host, command, jump_host=None, terminal=True):
+    arguments = ["ssh", "-tt" if jump_host and terminal else "-T", "-o", "ForwardAgent=no", "-o", "ForwardX11=no"]
     if jump_host:
         arguments.extend(["-o", "ControlMaster=no", "-o", "ControlPath=none", "-J", jump_host])
     return [*arguments, "--", host, command]
@@ -44,6 +44,8 @@ def main():
                                    help="Remote absolute path or '~/path' (" + variable + ").")
         if command == "connect":
             subparser.add_argument("workspace", help="Existing absolute remote path or quoted '~/project'.")
+            subparser.add_argument("--device-auth", action="store_true",
+                                   help="Explicitly use device-code sign-in instead of browser forwarding.")
             for name, default in (("cpus", "2"), ("mem", "4G"), ("time", "02:00:00"),
                                   ("account", None), ("partition", None)):
                 variable = "CODEX_HPC_" + name.upper()
@@ -119,12 +121,19 @@ def main():
             ready = json.loads(result.stdout)
             print("Workspace: " + ready["workspace"], flush=True)
             print("Preflight passed.", flush=True)
+            if ready["needs_login"] and not args.device_auth:
+                signin.check_callback_port()
             def launch(job_id, node, cluster):
                 request = dict(ready, job_id=job_id, node=node, cluster=cluster,
-                               cpus=resources["cpus"], release=payload["release"])
+                               cpus=resources["cpus"], release=payload["release"],
+                               device_auth=args.device_auth)
+                host = ready["user"] + "@" + node
+                authentication = shlex.join(["python3", ready["helper"], "--authenticate", json.dumps(request)])
+                signin.authenticate(ssh_arguments(host, authentication, jump_host=args.host, terminal=False),
+                                    host, args.host)
                 command = shlex.join(["python3", ready["helper"], "--compute", json.dumps(request)])
                 return subprocess.run(ssh_arguments(
-                    ready["user"] + "@" + node, command, jump_host=args.host)).returncode
+                    host, command, jump_host=args.host)).returncode
 
             return allocation.connect(args.host, remote, resources, launch)
         except (OSError, ValueError) as error:
