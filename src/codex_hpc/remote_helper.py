@@ -214,6 +214,9 @@ def preflight(payload):
             raise ValueError("matching release is not ready; cannot resolve " + name + " " +
                              str(path) + ": " + str(error) + "\nRun: " + payload["setup_command"])
     check_workspace_isolation(workspace, protected)
+    if target.is_dir() and not image.is_file():
+        raise ValueError("matching release is not ready; image missing or not a regular file at " +
+                         str(image) + "\nRun: " + payload["setup_command"])
     expected = {"helper.py": payload["helper"], "trusted.pem": payload["key"],
                 "release.json": encoded, "installation.json": installation}
     if (not target.is_dir() or target.is_symlink() or not image.is_file() or any(
