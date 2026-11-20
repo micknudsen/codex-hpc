@@ -66,6 +66,27 @@ release prints the exact `setup` command with the selected destination and roots
 After preflight, connect checks for `sbatch`, `squeue`, and `scancel` on the login
 host before requesting an allocation.
 
+## Upgrades and storage reclamation
+
+After updating the local client, rerun `setup`. A successful activation immediately
+collects obsolete managed helpers and images that are no longer needed. The active
+installation keeps its image even with no sessions. Images are shared by architecture
+and signed digest, including installations with different data roots using one cache.
+Unrelated files and the working installation after a failed upgrade are preserved.
+
+Connect holds a remote release lease before preflight completes, through queueing,
+sign-in and execution. An upgrade can proceed during that time; each session keeps
+its selected helper and image. The last session's exit collects obsolete files, and
+later setup retries cleanup missed after interruption. No separate collection command
+or local session journal is required.
+
+If the lease connection disappears, cleanup inspects its exact scheduler marker.
+Running or queued jobs retain their files; unavailable or malformed ownership evidence
+defers cleanup. A submission whose response was never acknowledged and whose marker
+has never been observed is retained conservatively, without a timeout. Use the printed
+scheduler recovery information to resolve the job; subsequent setup can collect once
+an observed job is absent. Cleanup failures report that setup can be rerun to retry.
+
 ## Allocation and recovery
 
 Connect requests one node and one task and prints the resolved resources before
