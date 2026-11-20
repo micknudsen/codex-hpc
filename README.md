@@ -8,10 +8,12 @@ Maintainers can [build and qualify a signed image candidate](docs/build-image.md
 
 ## Development client
 
-The client currently resolves SSH destinations and remote storage for `setup` and
-`connect`. Both commands then exit nonzero: remote release installation and Slurm
-sessions are still being implemented. Discovery creates no managed installation
-or credentials and does not submit a job.
+A candidate client wheel bundles its matching helper, image metadata and trust key.
+Its `setup` prepares that release on the login host and reports success only after
+verification and atomic activation. A source-only install has no release bundle;
+it reports discovered paths and exits nonzero. `connect` still stops after
+discovery while session startup is implemented. Neither command submits a job or
+starts sign-in at this stage.
 
 Install from this checkout with Python 3.9 or later:
 
@@ -24,7 +26,7 @@ python3 -m venv .venv
 ```
 
 The client needs OpenSSH on `PATH`. The login host needs `python3` and a POSIX
-shell. SSH uses your normal configuration, authentication and host-key checks;
+shell; setup also needs `curl` and Apptainer with PEM verification support. SSH uses your normal configuration, authentication and host-key checks;
 agent and X11 forwarding are disabled. SSH aliases work without another profile
 file. Discovery reports SSH, remote interpreter and storage errors to the caller.
 
@@ -45,11 +47,30 @@ POSIX paths or begin with `~/`; quote paths so your local shell does not expand
 `HOME`. Spaces, Unicode and shell metacharacters in paths stay literal. Bare
 relative paths, `~otheruser` paths, control characters, files and paths beneath
 non-directory ancestors produce errors. Roots may be directories that do not yet
-exist. Storage permissions and capacity will be checked during installation.
+exist. Setup checks writability and available space before an image transfer.
+Filesystem quotas can still reject a write; setup reports that failure without
+changing the active installation.
 
 `connect` requires an explicit workspace; workspace validation and session launch
 belong to later implementation steps. Run either command with `--help` for its
 arguments.
+
+## Remote setup
+
+Install a qualified candidate wheel, then run `codex-hpc setup --host my-cluster`.
+Setup downloads a missing image directly on the login host from its bundled
+original GitHub Release URL. The cache uses architecture and the SHA-256 of the
+signed bytes, so newer clients can share an older image without downloading it
+again. Every setup checks size, SHA-256 and the signature using its dedicated
+public key, including cache hits. It does not import keys into your global
+Apptainer configuration.
+
+Setup locks canonical data and cache roots while staging and activating the
+release. Concurrent attempts share the verified download. Transfer failures,
+quota errors and interrupted staging preserve the previous `current` activation;
+rerun the same command to retry. A damaged cached image or installed release is
+reported rather than activated. Unrelated files and saved credentials are left
+alone. Obsolete-release collection is implemented separately.
 
 ## Product tests
 
@@ -63,5 +84,10 @@ virtual environment, and invokes the installed `codex-hpc` entry point outside
 the checkout. A controlled SSH executable runs the packaged discovery script in
 a separate process with its own remote `HOME` and XDG environment. Tests cover
 argument errors, independent precedence, literal paths and observable failures.
-They do not claim real-cluster or real-SSH qualification. CI runs the same suite
+Setup scenarios also cover cold/warm installation, low space, transfer and quota
+errors, wrong keys, damaged bytes, concurrent attempts, interrupted transfer and
+retry, and a newer client referencing an older asset. The regular suite controls
+Apptainer responses; the signed-image CI job repeats setup with the actual signed
+SIF and real signature verification. These do not claim real-cluster or real-SSH
+qualification. CI runs the same suite
 on Ubuntu 24.04 and macOS with Python 3.9 and 3.14 for PRs and after merge to `master`.
