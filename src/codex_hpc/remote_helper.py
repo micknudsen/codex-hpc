@@ -80,7 +80,7 @@ def setup(payload):
     release = payload["release"]
     image_metadata = release["image"]
     if (release["schema"] != 1 or release["protocol_version"] != 1
-            or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)+", image_metadata["architecture"])
+            or image_metadata["architecture"] != "linux/amd64"
             or not re.fullmatch(r"[0-9a-f]{64}", image_metadata["sha256"])
             or not isinstance(image_metadata["size"], int) or image_metadata["size"] <= 0
             or not image_metadata["url"].startswith(
@@ -98,7 +98,7 @@ def setup(payload):
         releases = roots["data"] / "releases"
         releases.mkdir(exist_ok=True)
         recover_staging(releases, ".setup-")
-        images = roots["cache"] / "images" / image_metadata["architecture"]
+        images = roots["cache"] / "images" / image_metadata["architecture"].replace("/", "-")
         images.mkdir(parents=True, exist_ok=True)
         recover_staging(images, ".download-")
         for name, root in roots.items():

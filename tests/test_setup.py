@@ -49,7 +49,7 @@ class SetupCLI(unittest.TestCase):
                        "image_interface_version": 1, "helper_sha256": sha(bundle / "helper.py"),
                        "trust": {"format": "PEM", "public_key": "trusted.pem",
                                  "sha256": sha(bundle / "trusted.pem")},
-                       "image": {"architecture": "linux-amd64", "sha256": sha(cls.image),
+                       "image": {"architecture": "linux/amd64", "sha256": sha(cls.image),
                                  "size": cls.image.stat().st_size,
                                  "url": "https://github.com/micknudsen/codex-hpc/releases/download/v0.1.0/codex-hpc-linux-amd64.sif"}}
             (bundle / "release.json").write_text(json.dumps(release))
