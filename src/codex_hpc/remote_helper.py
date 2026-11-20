@@ -231,7 +231,11 @@ def preflight(payload):
         raise ValueError("matching release is not ready at " + str(target) +
                          "\nRun: " + payload["setup_command"])
     verify(image, release, target / "trusted.pem")
+    credentials = CredentialStore(roots["state"])
+    with credentials.locked():
+        needs_login = credentials.read(credentials.path) is None
     return {"workspace": str(workspace), "helper": str(target / "helper.py"), "image": str(image),
+            "needs_login": needs_login,
             "user": pwd.getpwuid(os.getuid()).pw_name,
             "roots": {name: str(path) for name, path in roots.items()}}
 
@@ -277,7 +281,8 @@ def compute(payload):
             raise ValueError("compute Apptainer lacks required capability " + option)
     command = ["srun", "--jobid=" + payload["job_id"], *payload["cluster"],
                "--nodes=1", "--ntasks=1", "--nodelist=" + payload["node"],
-               "--cpus-per-task=" + payload["cpus"], "--exact", "--pty", "--export=ALL",
+               "--cpus-per-task=" + payload["cpus"], "--exact",
+               *([] if payload.get("authenticate") else ["--pty"]), "--export=ALL",
                "python3", payload["helper"], "--execute", json.dumps(payload)]
     return subprocess.run(command, env=environment).returncode
 
@@ -361,6 +366,41 @@ class CredentialStore:
                     temporary.unlink(missing_ok=True)
 
 
+def authenticate(command, environment, scratch, device_auth=False):
+    def emit(event, **values):
+        print(json.dumps(dict(event=event, **values)), flush=True)
+
+    status = subprocess.run([*command, "login", "status"], env=environment,
+                            cwd=scratch, capture_output=True)
+    if status.returncode == 0:
+        emit("complete")
+        return 0
+    process = subprocess.Popen([*command, "login", *(["--device-auth"] if device_auth else [])],
+                               env=environment, cwd=scratch,
+                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                               stderr=subprocess.STDOUT, text=True)
+    try:
+        for line in process.stdout:
+            url = line.strip()
+            if device_auth:
+                emit("message", text=line.rstrip())
+            elif url.startswith("https://auth.openai.com/"):
+                emit("browser", url=url)
+        if process.wait():
+            raise ValueError("Codex sign-in failed")
+        emit("complete")
+        return 0
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        process.stdout.close()
+
+
 def execute(payload):
     if os.environ.get("SLURM_JOB_ID") != payload["job_id"] or not os.environ.get("SLURM_STEP_ID"):
         raise ValueError("compute launch is not inside its owned Slurm job step")
@@ -394,10 +434,17 @@ def execute(payload):
                    "hostfs,bind-paths,cwd", "--home", str(home) + ":" + internal_home,
                    "--workdir", str(work), "--mount", mount.getvalue(), "--pwd", str(workspace),
                    "--env", "HOME=" + internal_home,
-                   "--env", "CODEX_HOME=" + internal_home + "/.codex", payload["image"],
+                   "--env", "CODEX_HOME=" + internal_home + "/.codex",
+                   *(["--env", "BROWSER=/bin/true"] if payload.get("authenticate") else []),
+                   payload["image"],
                    payload["release"].get("executables", {}).get("codex", "/usr/local/bin/codex"),
                    '--config=cli_auth_credentials_store="file"']
         try:
+            if payload.get("authenticate"):
+                # Login logs stay private and expire even when workspace config
+                # sets another log location. Browser opening belongs to the client.
+                command.append('--config=log_dir="' + internal_home + '/.codex/log"')
+                return authenticate(command, environment, scratch, payload.get("device_auth", False))
             return subprocess.run(command, env=environment, cwd=scratch).returncode
         finally:
             credentials.persist(auth, initial)
@@ -434,6 +481,7 @@ def main():
     commands.add_argument("--slurm", help=argparse.SUPPRESS)
     commands.add_argument("--compute", help=argparse.SUPPRESS)
     commands.add_argument("--execute", help=argparse.SUPPRESS)
+    commands.add_argument("--authenticate", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.describe:
         release = json.loads(Path(__file__).with_name("release.json").read_text())
@@ -445,6 +493,8 @@ def main():
         slurm(json.loads(args.slurm))
     elif args.compute:
         return compute(json.loads(args.compute))
+    elif args.authenticate:
+        return compute(dict(json.loads(args.authenticate), authenticate=True))
     elif args.execute:
         return execute(json.loads(args.execute))
     else:

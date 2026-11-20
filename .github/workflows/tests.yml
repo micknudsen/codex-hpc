@@ -71,6 +71,10 @@ jobs:
         env:
           CODEX_HPC_TEST_CANDIDATE: ${{ runner.temp }}/candidate
         run: python -m unittest discover -s tests -p test_credentials.py -v
+      - name: Qualify forwarded sign-in with disposable login and browser peers
+        env:
+          CODEX_HPC_TEST_CANDIDATE: ${{ runner.temp }}/candidate
+        run: python -m unittest discover -s tests -p test_signin.py -v
       - name: Retain qualified candidate for dependent setup tests
         uses: actions/upload-artifact@v4
         with:
