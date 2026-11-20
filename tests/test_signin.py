@@ -70,6 +70,7 @@ import json, os, signal, socket, sys, time
 from pathlib import Path
 control, port = Path(sys.argv[1]), int(sys.argv[2])
 listener = socket.socket()
+listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 def close(signum, frame):
     listener.close()
     control.unlink(missing_ok=True)
@@ -150,6 +151,7 @@ print("signed-in interactive session")
 
     def test_known_needed_busy_callback_port_stops_before_submission(self):
         with socket.socket() as busy:
+            busy.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             busy.bind(("127.0.0.1", 1455))
             busy.listen()
             result = self.connect()
@@ -158,6 +160,21 @@ print("signed-in interactive session")
         self.assertIn("free", result.stderr)
         self.assertIn("rerun", result.stderr)
         self.assertEqual(self.scheduler_events(), [])
+
+    def test_recently_closed_callback_does_not_block_new_signin(self):
+        # OpenSSH listeners permit address reuse. Force the accepted socket to
+        # close first, leaving TIME_WAIT but no process listening on the port.
+        with socket.socket() as previous:
+            previous.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            previous.bind(("127.0.0.1", 1455))
+            previous.listen()
+            with socket.create_connection(("127.0.0.1", 1455)) as client:
+                accepted, _ = previous.accept()
+                accepted.close()
+                self.assertEqual(client.recv(1), b"")
+        result = self.connect()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("signed-in interactive session", result.stdout)
 
     def test_browser_opens_after_tunnel_and_tunnel_closes_before_session(self):
         unrelated_control = self.root / "unrelated-control"
@@ -224,6 +241,7 @@ print("signed-in interactive session")
             self.env["REAL_LOGIN_STATUS"] = "1"
         self.save_auth()
         with socket.socket() as busy:
+            busy.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             busy.bind(("127.0.0.1", 1455))
             busy.listen()
             result = self.connect()
@@ -234,6 +252,7 @@ print("signed-in interactive session")
         # Codex can select its documented fallback when the node's 1455 is busy.
         self.env["CALLBACK_PORT"] = "1457"
         with socket.socket() as busy:
+            busy.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             busy.bind(("127.0.0.1", 1457))
             busy.listen()
             result = self.connect()
@@ -246,6 +265,7 @@ print("signed-in interactive session")
 
     def test_device_code_is_explicit_and_ignores_busy_browser_port(self):
         with socket.socket() as busy:
+            busy.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             busy.bind(("127.0.0.1", 1455))
             busy.listen()
             result = self.connect("--device-auth")
@@ -280,6 +300,7 @@ print("signed-in interactive session")
             login = next(event for event in self.signin_events() if event["event"] == "login")
             with self.assertRaises(ProcessLookupError): os.kill(login["pid"], 0)
             with socket.socket() as free:
+                free.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 free.bind(("127.0.0.1", 1455))
         finally:
             if process.poll() is None:

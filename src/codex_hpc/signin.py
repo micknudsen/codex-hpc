@@ -16,6 +16,9 @@ from .transport import ssh_options
 def check_callback_port(port=1455):
     try:
         with socket.socket() as listener:
+            # Match OpenSSH's forwarding listener: TIME_WAIT from a completed
+            # callback is reusable, while an active listener still blocks bind.
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             listener.bind(("127.0.0.1", port))
     except OSError as error:
         raise ValueError("browser callback port " + str(port) +
