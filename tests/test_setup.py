@@ -302,10 +302,31 @@ time.sleep(30)
                 os.killpg(process.pid, signal.SIGKILL)
                 process.communicate()
         self.assertEqual(self.snapshot(), before)
+        abandoned_parent = next((self.home / "retry-cache/images").iterdir())
+        unrelated = abandoned_parent / ".download-unrelated"
+        unrelated.mkdir()
+        (unrelated / "notes").write_text("keep this")
         self.script("curl", original)
+        # A leftover partial consumes the available filesystem capacity until recovered.
+        self.env["ABANDONED_PARENT"] = str(abandoned_parent)
+        self.script("python3", '''
+import os, sys
+from pathlib import Path
+original_statvfs = os.statvfs
+def storage(path):
+    if any(Path(os.environ["ABANDONED_PARENT"]).glob(".download-*/image.sif")):
+        return os.statvfs_result((4096, 4096, 1, 0, 0, 0, 0, 0, 0, 255))
+    return original_statvfs(path)
+os.statvfs = storage
+sys.argv.pop(1)
+exec(compile(sys.stdin.read(), "<remote>", "exec"))
+''')
         result = self.setup()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotEqual(self.snapshot()[0], before[0])
+        self.assertEqual(list(abandoned_parent.glob(".download-*")), [unrelated])
+        self.assertEqual((unrelated / "notes").read_text(), "keep this")
+        self.assertEqual(list((self.data / "releases").glob(".setup-*")), [])
         self.assertEqual(self.events(), ["fetch " + self.release["image"]["url"], "verify",
                                        "fetch " + self.release["image"]["url"], "verify"])
 

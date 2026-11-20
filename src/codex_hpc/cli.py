@@ -8,6 +8,10 @@ import subprocess
 import sys
 
 
+def ssh_arguments(host, command):
+    return ["ssh", "-T", "-o", "ForwardAgent=no", "-o", "ForwardX11=no", "--", host, command]
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Run Codex in one remote Slurm workspace.",
@@ -40,8 +44,7 @@ def main():
     remote_command = "python3 - " + shlex.quote(json.dumps(overrides))
     try:
         result = subprocess.run(
-            ["ssh", "-T", "-o", "ForwardAgent=no", "-o", "ForwardX11=no",
-             "--", args.host, remote_command],
+            ssh_arguments(args.host, remote_command),
             input=source, text=True, stdout=subprocess.PIPE)
     except OSError as error:
         print("codex-hpc: cannot start SSH discovery: " + str(error) +
@@ -76,7 +79,7 @@ def main():
                        "helper": helper}
             command = "python3 - --setup " + shlex.quote(json.dumps(payload))
             return subprocess.run(
-                ["ssh", "-T", "-o", "ForwardAgent=no", "-o", "ForwardX11=no", "--", args.host, command],
+                ssh_arguments(args.host, command),
                 input=helper, text=True).returncode
         except (OSError, ValueError) as error:
             print("codex-hpc: setup failed: " + str(error), file=sys.stderr)

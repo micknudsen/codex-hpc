@@ -1,6 +1,6 @@
 """Self-contained helper bundled beside its matching release metadata."""
 import argparse
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 import fcntl
 import hashlib
 import json
@@ -35,18 +35,33 @@ def verify(image, release, key):
                          result.stderr.strip())
 
 
-def prepare_image(cache, release, key):
-    images = cache / "images" / release["image"]["architecture"]
-    images.mkdir(parents=True, exist_ok=True)
+def recover_staging(parent, prefix):
+    # Caller holds the canonical root lock: marked transactions cannot still be active.
+    for directory in parent.glob(prefix + "*"):
+        marker = directory / ".codex-hpc-transaction"
+        if (directory.is_dir() and not directory.is_symlink() and marker.is_file()
+                and not marker.is_symlink() and marker.read_text() == "setup-v1"):
+            shutil.rmtree(directory)
+
+
+@contextmanager
+def staging(parent, prefix):
+    with tempfile.TemporaryDirectory(prefix=prefix, dir=parent) as temporary:
+        directory = Path(temporary)
+        (directory / ".codex-hpc-transaction").write_text("setup-v1")
+        yield directory
+
+
+def prepare_image(images, release, key):
     image = images / (release["image"]["sha256"] + ".sif")
     if image.exists():
         verify(image, release, key)
         return image
     if shutil.disk_usage(images).free < release["image"]["size"] + 1024 * 1024:
         raise ValueError("insufficient free space for image download at " + str(images))
-    with tempfile.TemporaryDirectory(prefix=".download-", dir=images) as temporary:
-        partial = Path(temporary) / "image.sif"
-        result = subprocess.run(["curl", "--fail", "--location", "--proto", "=https",
+    with staging(images, ".download-") as temporary:
+        partial = temporary / "image.sif"
+        result = subprocess.run(["curl", "--disable", "--fail", "--location", "--proto", "=https",
                                  "--proto-redir", "=https", "--silent", "--show-error",
                                  "--output", str(partial), release["image"]["url"]],
                                 capture_output=True, text=True)
@@ -73,11 +88,6 @@ def setup(payload):
         raise ValueError("invalid or unsupported bundled release metadata")
     for name, root in roots.items():
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        try:
-            with tempfile.TemporaryFile(dir=root):
-                pass
-        except OSError as error:
-            raise ValueError(name + " root is not writable: " + str(root) + ": " + str(error))
     for tool in ("curl", "apptainer"):
         if shutil.which(tool) is None:
             raise ValueError("required login-host tool is missing: " + tool)
@@ -87,18 +97,27 @@ def setup(payload):
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         releases = roots["data"] / "releases"
         releases.mkdir(exist_ok=True)
+        recover_staging(releases, ".setup-")
+        images = roots["cache"] / "images" / image_metadata["architecture"]
+        images.mkdir(parents=True, exist_ok=True)
+        recover_staging(images, ".download-")
+        for name, root in roots.items():
+            try:
+                with tempfile.TemporaryFile(dir=root):
+                    pass
+            except OSError as error:
+                raise ValueError(name + " root is not writable: " + str(root) + ": " + str(error))
         if shutil.disk_usage(releases).free < 1024 * 1024:
             raise ValueError("insufficient free space for release staging at " + str(releases))
         encoded = json.dumps(release, sort_keys=True)
-        with tempfile.TemporaryDirectory(prefix=".setup-", dir=releases) as temporary:
-            stage = Path(temporary)
+        with staging(releases, ".setup-") as stage:
             key = stage / "trusted.pem"
             key.write_text(payload["key"])
             helper = stage / "helper.py"
             helper.write_text(payload["helper"])
             if digest(key) != release["trust"]["sha256"] or digest(helper) != release["helper_sha256"]:
                 raise ValueError("bundled helper or public key checksum mismatch")
-            image = prepare_image(roots["cache"], release, key)
+            image = prepare_image(images, release, key)
             (stage / "release.json").write_text(encoded)
             installation = json.dumps({"image": str(image)})
             (stage / "installation.json").write_text(installation)
