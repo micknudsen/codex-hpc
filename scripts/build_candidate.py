@@ -95,6 +95,116 @@ def export_source(result):
         shutil.copyfile(REPO / relative, target)
 
 
+def candidate_output(args):
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[ab]|rc|\.dev)?[0-9]*", args.version):
+        raise ValueError("version must be a numeric PEP 440 release or prerelease")
+    output = Path(args.output).resolve()
+    if output.exists():
+        raise ValueError("output already exists; choose a new candidate directory")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    return output
+
+
+def selection(result, decision, reason, release):
+    write_json(result / "selection.json", {
+        "schema": 1, "decision": decision, "reason": reason,
+        "actions": {"build": decision == "new", "sign": decision == "new",
+                    "upload_image": decision == "new"},
+        "published": False,
+        "image": release["image"], "source_release": release["image_source_release"],
+    })
+
+
+def qualify_client(candidate, image):
+    result = subprocess.run([sys.executable, str(REPO / "tests/check_compatibility.py"),
+                             str(candidate), str(image)], text=True, capture_output=True)
+    if result.returncode:
+        raise ValueError("candidate client/helper compatibility failed:\n" + result.stderr)
+    expected = json.loads((candidate / "release/release.json").read_text())["image"]
+    actual_digest = digest(image)
+    if actual_digest != expected["sha256"] or image.stat().st_size != expected["size"]:
+        raise ValueError("image changed during candidate compatibility qualification")
+    write_json(candidate / "compatibility.json", {
+        "schema": 1, "signed_image_sha256": actual_digest,
+        "boundary": "installed setup and connect with controlled SSH/Slurm and actual Apptainer",
+        "checks": ["cold-original-url", "warm-no-download", "signature-verification",
+                   "helper-launch", "codex-version", "workspace-write", "owned-job-cleanup"],
+    })
+
+
+def prior_inputs(previous, current):
+    try:
+        prior = json.loads((previous / "provenance.json").read_text())
+        required = {"schema", "inputs", "files", "fingerprint", "signed_image_sha256",
+                    "build_tools_observed", "build_packages_observed", "base_package_versions",
+                    "qualification_output"}
+        resolved = {key: prior[key] for key in ("schema", "inputs", "files")}
+        fingerprint = hashlib.sha256(json.dumps(resolved, sort_keys=True,
+            separators=(",", ":")).encode()).hexdigest()
+        if (not required.issubset(prior) or prior["schema"] != 1 or not prior["files"]
+                or fingerprint != prior["fingerprint"]):
+            return None, "incomplete provenance"
+        expected_tools = {name: prior["inputs"]["build_tools"][name]
+                          for name in ("apptainer", "python", "squashfs_tools")}
+        if (prior["build_tools_observed"] != expected_tools
+                or prior["build_packages_observed"] != prior["inputs"]["build_packages"]
+                or not prior["base_package_versions"] or not prior["qualification_output"]):
+            return None, "incomplete provenance"
+    except (OSError, ValueError, KeyError, TypeError):
+        return None, "incomplete provenance"
+    if any(prior[key] != current[key] for key in ("schema", "inputs", "files", "fingerprint")):
+        return None, "changed image inputs"
+    return prior, "complete matching inputs"
+
+
+def reuse(args, prior, reason):
+    if not args.trusted_release:
+        raise ValueError("reuse requires independently trusted release metadata (--trusted-release)")
+    release = json.loads(Path(args.trusted_release).read_text())
+    key = Path(args.public_key).resolve()
+    identity = release["image"]
+    source = re.fullmatch(r"https://github\.com/micknudsen/codex-hpc/releases/download/"
+                         r"(v[0-9][A-Za-z0-9.\-]*)/codex-hpc-linux-amd64\.sif", identity["url"])
+    if (not source or release["schema"] != 1 or identity["architecture"] != "linux/amd64"
+            or identity["input_fingerprint"] != prior["fingerprint"]
+            or identity["sha256"] != prior["signed_image_sha256"]
+            or release["trust"] != {"format": "PEM", "public_key": "trusted.pem", "sha256": digest(key)}):
+        raise ValueError("prior image identity or trust does not match trusted release metadata")
+    image = Path(args.previous).resolve() / "codex-hpc-linux-amd64.sif"
+    if image.stat().st_size != identity["size"] or digest(image) != identity["sha256"]:
+        raise ValueError("prior image checksum or size differs from trusted release metadata")
+    run("apptainer", "verify", "--key", str(key), str(image))
+    output = candidate_output(args)
+    with tempfile.TemporaryDirectory(prefix="candidate-", dir=output.parent) as temporary:
+        stage = Path(temporary)
+        result = stage / "result"
+        result.mkdir()
+        release.update(candidate=True, version=args.version, image_source_release=source[1])
+        package_client(stage, result, release, key)
+        write_json(result / "provenance.json", prior)
+        export_source(result)
+        shutil.copyfile(REPO / "docs/build-image.md", result / "BUILD.md")
+        qualify_client(result, image)
+        selection(result, "reuse", reason, release)
+        result.rename(output)
+    print(str(output))
+
+
+def prepare(args):
+    prior, reason = (prior_inputs(Path(args.previous), inputs()) if args.previous
+                     else (None, "first image"))
+    if prior is not None:
+        print("Preparing reused image: " + reason, flush=True)
+        reuse(args, prior, reason)
+    else:
+        print("Preparing new image: " + reason, flush=True)
+        if not args.private_key:
+            raise ValueError("a private key is required to build a new image")
+        args.selection_reason = reason
+        args.qualify_client = True
+        build(args)
+
+
 def build(args):
     provenance = inputs()
     lock = provenance["inputs"]
@@ -111,12 +221,7 @@ def build(args):
                        for name in lock["build_packages"]}
     if actual_packages != lock["build_packages"]:
         raise ValueError("build package versions differ from image/inputs.json")
-    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[ab]|rc|\.dev)?[0-9]*", args.version):
-        raise ValueError("version must be a numeric PEP 440 release or prerelease")
-    output = Path(args.output).resolve()
-    if output.exists():
-        raise ValueError("output already exists; choose a new candidate directory")
-    output.parent.mkdir(parents=True, exist_ok=True)
+    output = candidate_output(args)
     private_key = Path(args.private_key).resolve()
     public_key = Path(args.public_key).resolve()
     with tempfile.TemporaryDirectory(prefix="candidate-", dir=output.parent) as temporary:
@@ -155,6 +260,7 @@ def build(args):
             packages = run(*command, "dpkg-query", "-W", "-f=${Package}=${Version}\n")
         release = {
             "schema": 1, "candidate": True, "version": args.version,
+            "image_source_release": "v" + args.version,
             "protocol_version": 1, "image_interface_version": 1,
             "image": {"url": "https://github.com/micknudsen/codex-hpc/releases/download/v" +
                       args.version + "/" + image_name, "sha256": image_digest,
@@ -182,6 +288,9 @@ def build(args):
         (result / "codex.def").write_text(definition)
         export_source(result)
         shutil.copyfile(REPO / "docs/build-image.md", result / "BUILD.md")
+        if getattr(args, "qualify_client", False):
+            qualify_client(result, image)
+        selection(result, "new", getattr(args, "selection_reason", "explicit build"), release)
         result.rename(output)
     print(str(output))
 
@@ -193,13 +302,21 @@ def main():
     candidate = commands.add_parser("build", help="Build/sign/verify/qualify and package a candidate.")
     for option in ("version", "output", "private-key", "public-key"):
         candidate.add_argument("--" + option, required=True)
+    preparation = commands.add_parser("prepare", help="Select and qualify a new or reused image.")
+    for option in ("version", "output", "public-key"):
+        preparation.add_argument("--" + option, required=True)
+    preparation.add_argument("--private-key", help="Required only when a new image is selected.")
+    preparation.add_argument("--previous", help="Earlier image/provenance directory; never modified.")
+    preparation.add_argument("--trusted-release", help="Independently trusted earlier release.json.")
     args = parser.parse_args()
     try:
         if args.command == "fingerprint":
             print(json.dumps(inputs(), sort_keys=True))
+        elif args.command == "prepare":
+            prepare(args)
         else:
             build(args)
-    except (ValueError, OSError, subprocess.CalledProcessError) as error:
+    except (ValueError, OSError, KeyError, TypeError, subprocess.CalledProcessError) as error:
         parser.exit(1, "candidate: " + str(error) + "\n")
 
 
