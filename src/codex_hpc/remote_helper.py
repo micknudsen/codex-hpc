@@ -200,7 +200,6 @@ def preflight(payload):
             raise ValueError("workspace is not a directory: " + str(workspace))
     except (OSError, RuntimeError) as error:
         raise ValueError("workspace must be an existing directory: " + selected + ": " + str(error))
-    print("Workspace: " + str(workspace), flush=True)
     roots = {name: Path(path).resolve() for name, path in payload["roots"].items()}
     release = payload["release"]
     image = image_location(roots["cache"], release)
@@ -226,8 +225,23 @@ def preflight(payload):
         raise ValueError("matching release is not ready at " + str(target) +
                          "\nRun: " + payload["setup_command"])
     verify(image, release, target / "trusted.pem")
-    print("Preflight passed; session launch is not implemented in this development client.")
-    return 1
+    return {"workspace": str(workspace), "helper": str(target / "helper.py"), "image": str(image)}
+
+
+def slurm(arguments):
+    if arguments == ["check"]:
+        for tool in ("sbatch", "squeue", "scancel"):
+            if shutil.which(tool) is None:
+                raise ValueError("required login-host tool is missing: " + tool)
+        return
+    if arguments[0] not in ("sbatch", "squeue", "scancel"):
+        raise ValueError("unsupported scheduler operation")
+    # Ambient Slurm command options must not change the displayed request, add an
+    # array, redirect submission, or suppress/constrain cleanup unexpectedly.
+    environment = {key: value for key, value in os.environ.items()
+                   if not key.startswith(("SBATCH_", "SQUEUE_", "SCANCEL_"))
+                   and key != "SLURM_CLUSTERS"}
+    os.execvpe(arguments[0], arguments, environment)
 
 
 def main():
@@ -237,6 +251,7 @@ def main():
                           help="Report this helper's release and protocol identity.")
     commands.add_argument("--setup", help=argparse.SUPPRESS)
     commands.add_argument("--preflight", help=argparse.SUPPRESS)
+    commands.add_argument("--slurm", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.describe:
         release = json.loads(Path(__file__).with_name("release.json").read_text())
@@ -244,8 +259,10 @@ def main():
             "version", "protocol_version", "image_interface_version")}))
     elif args.setup:
         setup(json.loads(args.setup))
+    elif args.slurm:
+        slurm(json.loads(args.slurm))
     else:
-        return preflight(json.loads(args.preflight))
+        print(json.dumps(preflight(json.loads(args.preflight))))
 
 
 if __name__ == "__main__":

@@ -12,8 +12,9 @@ A candidate client wheel bundles its matching helper, image metadata and trust k
 Its `setup` prepares that release on the login host and reports success only after
 verification and atomic activation. A source-only install has no release bundle;
 it reports discovered paths and exits nonzero. `connect` validates its workspace
-and installed release, then stops after preflight while session startup is implemented. Neither command submits a job or
-starts sign-in at this stage.
+and installed release, submits and monitors one owned allocation, then releases
+it and exits nonzero because compute-node session launch is still being implemented.
+Setup never submits a job; neither command starts sign-in at this stage.
 
 Install from this checkout with Python 3.9 or later:
 
@@ -61,8 +62,47 @@ through workspace symlinks. Run either command with `--help` for its arguments.
 Every connection checks the matching installed helper, metadata and public key,
 then rechecks the image's signed digest and signature. A missing or incomplete
 release prints the exact `setup` command with the selected destination and roots.
-In this development stage a successful preflight still exits nonzero because
-allocation and session launch are not implemented yet.
+After preflight, connect checks for `sbatch`, `squeue`, and `scancel` on the login
+host before requesting an allocation.
+
+## Allocation and recovery
+
+Connect requests one node and one task and prints the resolved resources before
+submission. CLI options override the corresponding local environment values.
+Account and partition are left to Slurm when omitted and are displayed as such.
+
+| CLI option | Local environment | Default |
+| --- | --- | --- |
+| `--cpus` | `CODEX_HPC_CPUS` | `2` |
+| `--mem` | `CODEX_HPC_MEM` | `4G` |
+| `--time` | `CODEX_HPC_TIME` | `02:00:00` |
+| `--account` | `CODEX_HPC_ACCOUNT` | Slurm choice |
+| `--partition` | `CODEX_HPC_PARTITION` | Slurm choice |
+
+The client prints a unique job name before one `sbatch --parsable` submission and
+an exact SSH `scancel` command as soon as it receives the job ID. The batch job
+holds the allocation with `sleep infinity`; the future interactive `srun` step
+will run in this same allocation. This development version releases the ready
+allocation immediately and reports that session launch is not implemented.
+
+While pending, connect polls no more often than every five seconds and prints
+only changes in state or reason. There is no client queue timeout; Slurm's time
+limit applies after allocation, not to queue wait. Ctrl-C attempts immediate
+cleanup when the ID is known. Cleanup always combines the exact ID with the
+unique job name, including after startup errors or an ordinary return. It never
+cancels by user, partition, or job name alone. Ambient `SBATCH_*`, `SQUEUE_*`,
+`SCANCEL_*`, and `SLURM_CLUSTERS` options are excluded from managed commands;
+site configuration and authentication settings remain available.
+
+If the submission response is lost, connect does not resubmit or guess an ID.
+Use its printed `squeue --name=...` command to find the job and cancel the confirmed
+ID on the cluster. If automatic cleanup fails, use the printed cancellation command.
+Job IDs stay in memory; no local session journal is written.
+
+These command contracts follow the official [sbatch](https://slurm.schedmd.com/sbatch.html),
+[squeue](https://slurm.schedmd.com/squeue.html), and [scancel](https://slurm.schedmd.com/scancel.html)
+documentation. A cluster-qualified submission response retains that cluster for
+polling and cancellation.
 
 ## Remote setup
 
@@ -99,6 +139,10 @@ retry, and a newer client referencing an older asset. The regular suite controls
 Apptainer responses; the signed-image CI job repeats setup with the actual signed
 SIF and real signature verification. Connect tests exercise canonical paths, managed-path isolation,
 literal setup recovery, missing or changed installed files and cached-image
-tampering, with zero Slurm submissions; CI repeats them with the real SIF. These
+tampering, with zero Slurm submissions on preflight failure. Allocation tests cover
+resource precedence, pending/running/failed/vanished jobs, actual five-second poll
+spacing, deduplicated status, lost responses, Ctrl-C before/after ID receipt, and
+cleanup with unrelated or reused job IDs present. CI repeats these with the real SIF
+and controlled scheduler executables. These
 do not claim real-cluster or real-SSH qualification. CI runs the same suite
 on Ubuntu 24.04 and macOS with Python 3.9 and 3.14 for PRs and after merge to `master`.

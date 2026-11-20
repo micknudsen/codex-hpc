@@ -58,6 +58,10 @@ jobs:
         env:
           CODEX_HPC_TEST_CANDIDATE: ${{ runner.temp }}/candidate
         run: python -m unittest discover -s tests -p test_connect.py -v
+      - name: Qualify owned allocation with the real signed candidate
+        env:
+          CODEX_HPC_TEST_CANDIDATE: ${{ runner.temp }}/candidate
+        run: python -m unittest discover -s tests -p test_allocation.py -v
       - name: Retain qualified candidate for dependent setup tests
         uses: actions/upload-artifact@v4
         with:

@@ -10,17 +10,26 @@ from test_setup import RemoteCLI
 class ConnectCLI(RemoteCLI):
     def setUp(self):
         super().setUp()
-        for tool in ("sbatch", "salloc", "srun"):
+        self.env["SUBMISSION_MARKER"] = str(self.root / "submission-attempt")
+        # Successful preflight now reaches the allocation stage. Keep that stage
+        # unavailable here; allocation tests exercise it separately.
+        for tool in ("sbatch", "salloc", "srun", "squeue", "scancel"):
             self.script(tool, '''
 import os
-with open(os.environ["EVENTS"], "a") as log: log.write("SLURM SUBMISSION\\n")
+from pathlib import Path
+Path(os.environ["SUBMISSION_MARKER"]).touch()
 raise SystemExit(99)
 ''')
 
     def connect(self, workspace, *arguments):
-        return subprocess.run([str(self.cli), "connect", str(workspace), "--host", "test-login",
+        marker = self.root / "submission-attempt"
+        marker.unlink(missing_ok=True)
+        result = subprocess.run([str(self.cli), "connect", str(workspace), "--host", "test-login",
                                *arguments], env=self.env, cwd=self.root,
                               capture_output=True, text=True)
+        if "Preflight passed" not in result.stdout:
+            self.assertFalse(marker.exists(), "failed preflight reached the scheduler")
+        return result
 
     def test_project_symlink_and_remote_home_resolve_before_verification(self):
         workspace = self.home / "projects/my project æ"
