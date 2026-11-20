@@ -11,8 +11,8 @@ import sys
 def main():
     parser = argparse.ArgumentParser(
         description="Run Codex in one remote Slurm workspace.",
-        epilog="Development build: setup and connect currently discover storage and exit nonzero; "
-               "remote release installation and session launch are not implemented yet.")
+        epilog="Setup installs the bundled release on the login host. "
+               "Development build: connect does not launch sessions yet.")
     commands = parser.add_subparsers(dest="command", required=True)
     for command, help_text in (("setup", "Prepare the matching remote release."),
                                ("connect", "Run Codex in an existing remote workspace.")):
@@ -67,6 +67,23 @@ def main():
     print("SSH destination: " + args.host)
     for name, path in roots.items():
         print(name + " root: " + path)
+    bundle = files("codex_hpc").joinpath("release")
+    if args.command == "setup" and bundle.joinpath("release.json").is_file():
+        try:
+            helper = bundle.joinpath("helper.py").read_text(encoding="utf-8")
+            payload = {"roots": roots, "release": json.loads(bundle.joinpath("release.json").read_text()),
+                       "key": bundle.joinpath("trusted.pem").read_text(encoding="utf-8"),
+                       "helper": helper}
+            command = "python3 - --setup " + shlex.quote(json.dumps(payload))
+            return subprocess.run(
+                ["ssh", "-T", "-o", "ForwardAgent=no", "-o", "ForwardX11=no", "--", args.host, command],
+                input=helper, text=True).returncode
+        except (OSError, ValueError) as error:
+            print("codex-hpc: setup failed: " + str(error), file=sys.stderr)
+            return 1
+        except KeyboardInterrupt:
+            print("codex-hpc: setup interrupted; rerun setup to retry.", file=sys.stderr)
+            return 130
     print("codex-hpc: remote release not installed; this development client only discovers storage.",
           file=sys.stderr)
     return 1
