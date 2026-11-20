@@ -148,7 +148,9 @@ def build(args):
             probe = run(*command, "/usr/local/bin/codex-hpc-probe")
             if "codex-cli " + lock["codex"]["version"] not in probe.splitlines():
                 raise ValueError("image Codex version differs from pinned input")
-            if "ripgrep " + lock["ripgrep"]["version"] not in probe.splitlines():
+            rg_version = "ripgrep " + lock["ripgrep"]["version"]
+            if not any(line == rg_version or line.startswith(rg_version + " ")
+                       for line in probe.splitlines()):
                 raise ValueError("image ripgrep version differs from pinned input")
             packages = run(*command, "dpkg-query", "-W", "-f=${Package}=${Version}\n")
         release = {
