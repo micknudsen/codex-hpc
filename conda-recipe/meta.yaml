@@ -1,0 +1,39 @@
+{% set name = "codex-hpc" %}
+{% set version = "0.1.0.dev0" %}
+
+package:
+  name: {{ name }}
+  version: {{ version }}
+
+# scripts/conda_release.py stages the qualified wheel beside this recipe.
+source:
+  path: .
+
+build:
+  number: 0
+  noarch: python
+  entry_points:
+    - codex-hpc = codex_hpc.cli:main
+  script: {{ PYTHON }} -m pip install codex_hpc-{{ version }}-py3-none-any.whl --no-deps --no-index
+
+requirements:
+  host:
+    - python >=3.9
+    - pip
+  run:
+    - python >=3.9
+    - openssh
+
+test:
+  imports:
+    - codex_hpc
+  commands:
+    - codex-hpc --help
+    - codex-hpc setup --help
+    - codex-hpc connect --help
+
+about:
+  summary: Interactive Codex in an isolated Slurm workspace
+  home: https://github.com/micknudsen/codex-hpc
+  license: MIT
+  license_file: LICENSE

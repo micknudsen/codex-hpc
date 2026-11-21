@@ -1,13 +1,59 @@
 ---
 name: codex-hpc-release
-description: Prepare and publish a requested codex-hpc version through protected PRs, approved notes, verified release artifacts, and GitHub Releases. Use when asked to cut or resume a release.
+description: Prepare or resume a requested codex-hpc release through agreed notes, protected PRs, exact-artifact Conda publication to micknudsen, and verified GitHub Releases. Use for an explicit release request; workflow edits and release questions alone do not authorize publication.
 ---
 
 # Release codex-hpc
 
-1. Start from the requested version and the [contribution policy](../../../.github/CONTRIBUTING.md). Fetch tags and current `master`. Inspect prior releases, existing tags, drafts, and preparation PRs. Use the matching milestone and linked issues to identify intended scope when available. Begin publication work only on a concrete release request.
-2. Verify that the requested semantic version matches the candidate and that the candidate commit has merged and passed CI. Compare the merged changes with the release scope. Check the acceptance criteria, applicable [design decisions](../../../docs/adr/), and validation evidence for that revision, including cluster evidence where required. Report unmet criteria or missing artifacts before proposing publication.
-3. Propose notes for the actual candidate, including requirements, changes, validation, and known limits. Obtain the maintainer's agreement to the notes before tagging or publishing. A changed release scope needs updated notes.
-4. Put release metadata and source changes through the same checked squash PR path. Identify the exact source commit on protected `master` and its passing CI. Follow the release tooling and supported platform matrix at that revision. Apply the [image reuse decision](../../../docs/adr/0003-stop-setup-on-image-download-failure.md) to each required SIF. Compare the resolved input fingerprint with prior release provenance. Record the decision and its evidence. For reuse, retain the original asset URL, signed digest, and trusted signing identity. For a new build, sign the SIF before recording its digest. Keep signing secrets out of version control and build logs.
-5. Qualify the candidate client and helper against the selected image. Tag the qualified commit with the requested version. Reuse an existing tag only if it identifies the intended commit. Stage newly produced artifacts in a draft GitHub Release. Link reused images at their original GitHub Release URLs and retain their provenance. Download each selected asset from its intended location to a fresh directory and verify its size, digest, and signature against the client metadata. Confirm the versioned client deliverable and release end-to-end checks before publication.
-6. Publish the verified draft with the agreed notes. Confirm that the public tag resolves to the recorded commit and the published assets match the verified bytes. If the release has a milestone, close it after its scope is delivered. Report the release URL, commit, CI evidence, artifact digests, and any outstanding limitation. Preserve published tags and assets when resuming interrupted work.
+Read [Releasing](../../../docs/releasing.md) and the
+[contribution policy](../../../.github/CONTRIBUTING.md) before acting. Follow their
+artifact, trust, retry and protected-merge rules. Do not copy gwflow's package
+dependencies, channel, acceptance status or baseline-refresh procedures.
+
+## Agree on scope and notes
+
+Fetch master and tags. Inspect merged scope, milestone/issue acceptance, version
+PRs, drafts, channel publications and retained qualification runs. Resume an
+existing attempt rather than creating competing artifacts. Propose a normal
+version unless the maintainer explicitly requests a prerelease. A packaging
+change or question does not authorize a release.
+
+Draft notes for actual scope, requirements, validation and remaining limits. Save
+progress and proposed notes under `.local/releases/<tag>/`. Obtain agreement to
+notes before version edits or publication. Agreement authorizes the described
+version PR, green squash merge, tag, Conda upload, verified GitHub publication
+and final notes PR without another publish prompt. Changed source scope needs
+updated notes and renewed agreement.
+
+## Prepare and qualify
+
+Update `setup.cfg` and `conda-recipe/meta.yaml` versions together and archive notes
+in `docs/releases/<tag>.md`. If an earlier image exists, pin its verified metadata,
+public key and provenance in `release/previous-image.json`; equal inputs retain
+its original URL and signing identity. New images require the release signing
+secret. Never print or retain private keys; inspect secret names, not values.
+
+Deliver preparation through a protected squash PR. Wait for all five required
+checks on the exact merged master commit before tagging it. Verify version/tag
+agreement and record the commit. Follow tag-triggered `Release qualification` to
+completion. Manual runs and PR disposable images are not publication evidence.
+Record the trusted run ID, immutable bundle artifact ID and package digest.
+
+## Publish and finish
+
+Monitor `Publish Conda release`: it uploads the exact qualified package to
+`micknudsen`, verifies a fresh channel install and stages a GitHub draft. Do not
+rebuild, replace bytes, move tags or bypass branch protection. Follow the documented
+resume procedure and retain evidence of partial publication.
+
+Independently download the draft assets and verify asset set, checksums, selected
+SIF signature, source/tag and channel package against the qualification bundle.
+Reused SIFs stay at their original published URLs. Apply agreed notes and publish
+the verified draft, marking prereleases correctly. Then verify the public image
+URL embedded in the client, final tag, channel distribution, assets and body.
+
+Synchronize final notes and evidence links through a checked PR; archived notes
+must match the GitHub body. Close milestones only when acceptance criteria are
+met. Controlled CI peers do not close real-cluster qualification #16. Report
+version, release URL, install command, source, qualification/publication evidence
+and remaining limits.

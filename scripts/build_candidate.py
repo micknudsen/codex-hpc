@@ -88,11 +88,10 @@ def package_client(stage, result, release, public_key):
 def export_source(result):
     source = result / "source"
     source.mkdir()
-    for directory in ("image", "src", "tests"):
+    for directory in ("image", "src", "tests", "scripts", "conda-recipe"):
         shutil.copytree(REPO / directory, source / directory, ignore=shutil.ignore_patterns(
             "*.egg-info", "__pycache__", "release"))
-    for relative in ("scripts/build_candidate.py", "scripts/install_apptainer_ci.sh",
-                     "docs/build-image.md", "README.md", "pyproject.toml", "setup.cfg", "LICENSE"):
+    for relative in ("docs/build-image.md", "README.md", "pyproject.toml", "setup.cfg", "LICENSE"):
         target = source / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(REPO / relative, target)

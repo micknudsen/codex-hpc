@@ -1,0 +1,92 @@
+name: Publish Conda release
+
+on:
+  workflow_run:
+    workflows: ['Release qualification']
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: release-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-24.04
+    outputs:
+      source: ${{ steps.identity.outputs.source }}
+      tag: ${{ steps.identity.outputs.tag }}
+      run_id: ${{ steps.identity.outputs.run_id }}
+      artifact_id: ${{ steps.identity.outputs.artifact_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Select successful qualification for the exact tagged source
+        id: identity
+        run: python scripts/release_identity.py publish --event "$GITHUB_EVENT_PATH" --output "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.identity.outputs.artifact_id }}
+          run-id: ${{ steps.identity.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: conda-release
+      - name: Verify qualified package and image identities
+        env:
+          SOURCE: ${{ steps.identity.outputs.source }}
+          TAG: ${{ steps.identity.outputs.tag }}
+        run: python scripts/conda_release.py verify --bundle conda-release --source "$SOURCE" --tag "$TAG"
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    env:
+      SOURCE: ${{ needs.verify.outputs.source }}
+      TAG: ${{ needs.verify.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify.outputs.source }}
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.verify.outputs.artifact_id }}
+          run-id: ${{ needs.verify.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: conda-release
+      - name: Install pinned image verification runtime
+        run: sh scripts/install_apptainer_ci.sh
+      - uses: conda-incubator/setup-miniconda@v4
+        with:
+          miniforge-version: latest
+          channels: conda-forge
+          conda-remove-defaults: "true"
+          activate-environment: ""
+      - name: Install channel publication client
+        shell: bash -l {0}
+        run: conda install -y -n base --override-channels -c conda-forge anaconda-client
+      - name: Publish or resume the exact tested package and verified draft
+        shell: bash -l {0}
+        env:
+          ANACONDA_API_TOKEN: ${{ secrets.ANACONDA_API_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ needs.verify.outputs.run_id }}
+          ARTIFACT_ID: ${{ needs.verify.outputs.artifact_id }}
+        run: |
+          python scripts/publish_conda.py --bundle conda-release --source "$SOURCE" --tag "$TAG" \
+            --run-id "$RUN_ID" --artifact-id "$ARTIFACT_ID" --output release-evidence
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codex-hpc-publication-evidence
+          path: release-evidence
+          overwrite: true
+          if-no-files-found: error
+          retention-days: 90

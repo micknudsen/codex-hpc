@@ -1,0 +1,45 @@
+name: Release qualification
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      source:
+        description: Full source SHA matching the selected master or tag ref
+        required: true
+        type: string
+      tag:
+        description: Expected package tag, such as v0.1.0 or v0.1.0rc1
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qualification-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require exact master source and matching versions
+        env:
+          REQUESTED_SOURCE: ${{ inputs.source || github.sha }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          python scripts/release_identity.py qualify --event "$GITHUB_EVENT_PATH" \
+            --source "$GITHUB_SHA" --requested-source "$REQUESTED_SOURCE" --tag "$RELEASE_TAG"
+  qualification:
+    needs: verify
+    uses: ./.github/workflows/tests.yml
+    with:
+      source: ${{ github.sha }}
+      release: true
+    secrets:
+      SIF_SIGNING_PRIVATE_KEY: ${{ secrets.SIF_SIGNING_PRIVATE_KEY }}
