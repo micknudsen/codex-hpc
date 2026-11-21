@@ -5,6 +5,17 @@ on:
     branches: [master]
   push:
     branches: [master]
+  workflow_call:
+    inputs:
+      source:
+        type: string
+        required: true
+      release:
+        type: boolean
+        default: false
+    secrets:
+      SIF_SIGNING_PRIVATE_KEY:
+        required: false
 
 permissions:
   contents: read
@@ -21,6 +32,8 @@ jobs:
         python: ['3.9', '3.14']
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source || github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
@@ -31,9 +44,11 @@ jobs:
   signed-image:
     name: Signed image qualification
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source || github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12.3'
@@ -43,51 +58,65 @@ jobs:
       - name: Create disposable candidate signing identity
         run: |
           umask 077
-          mkdir -p "$RUNNER_TEMP/signing"
-          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$RUNNER_TEMP/signing/private.pem"
-          openssl pkey -in "$RUNNER_TEMP/signing/private.pem" -pubout -out "$RUNNER_TEMP/signing/public.pem"
+          mkdir -p "$RUNNER_TEMP/fixture-signing"
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$RUNNER_TEMP/fixture-signing/private.pem"
+          openssl pkey -in "$RUNNER_TEMP/fixture-signing/private.pem" -pubout -out "$RUNNER_TEMP/fixture-signing/public.pem"
       - name: Build, sign and qualify candidate
         run: |
-          python scripts/build_candidate.py prepare --version 0.1.0.dev0 --output "$RUNNER_TEMP/candidate" --private-key "$RUNNER_TEMP/signing/private.pem" --public-key "$RUNNER_TEMP/signing/public.pem"
-          python tests/qualify_candidate.py "$RUNNER_TEMP/candidate"
+          version=$(python scripts/release_identity.py version)
+          python scripts/build_candidate.py prepare --version "$version" --output "$RUNNER_TEMP/fixture-candidate" --private-key "$RUNNER_TEMP/fixture-signing/private.pem" --public-key "$RUNNER_TEMP/fixture-signing/public.pem"
+          python tests/qualify_candidate.py "$RUNNER_TEMP/fixture-candidate"
       - name: Qualify new and reused image selection with disposable trust
-        run: python tests/qualify_selection.py "$RUNNER_TEMP/candidate" "$RUNNER_TEMP/signing/private.pem" "$RUNNER_TEMP/signing/public.pem"
-      - name: Qualify packaged setup with the real signed candidate
+        run: python tests/qualify_selection.py "$RUNNER_TEMP/fixture-candidate" "$RUNNER_TEMP/fixture-signing/private.pem" "$RUNNER_TEMP/fixture-signing/public.pem"
+      - name: Select disposable package candidate for ordinary CI
+        if: ${{ !inputs.release }}
+        run: |
+          mv "$RUNNER_TEMP/fixture-candidate" "$RUNNER_TEMP/candidate"
+          cp "$RUNNER_TEMP/candidate/codex-hpc-linux-amd64.sif" "$RUNNER_TEMP/selected.sif"
+      - name: Prepare the new or pinned release image
+        if: ${{ inputs.release }}
         env:
-          CODEX_HPC_TEST_CANDIDATE: ${{ runner.temp }}/candidate
-        run: python -m unittest discover -s tests -p test_setup.py -v
-      - name: Qualify connect preflight with the real signed candidate
+          SIF_SIGNING_PRIVATE_KEY: ${{ secrets.SIF_SIGNING_PRIVATE_KEY }}
+        run: |
+          umask 077
+          mkdir -p "$RUNNER_TEMP/signing"
+          if [ -n "$SIF_SIGNING_PRIVATE_KEY" ]; then
+            printf '%s\n' "$SIF_SIGNING_PRIVATE_KEY" > "$RUNNER_TEMP/signing/private.pem"
+            openssl pkey -in "$RUNNER_TEMP/signing/private.pem" -pubout -out "$RUNNER_TEMP/signing/public.pem"
+          fi
+          python scripts/release_image.py --candidate "$RUNNER_TEMP/candidate" \
+            --image "$RUNNER_TEMP/selected.sif" --private-key "$RUNNER_TEMP/signing/private.pem" \
+            --public-key "$RUNNER_TEMP/signing/public.pem"
+      - uses: conda-incubator/setup-miniconda@v4
+        with:
+          miniforge-version: latest
+          channels: conda-forge
+          conda-remove-defaults: "true"
+          activate-environment: ""
+      - name: Install Conda build tools
+        shell: bash -l {0}
+        run: conda install -y -n base --override-channels -c conda-forge conda-build conda-index
+      - name: Build and install the candidate Conda package
+        shell: bash -l {0}
         env:
-          CODEX_HPC_TEST_CANDIDATE: ${{ runner.temp }}/candidate
-        run: python -m unittest discover -s tests -p test_connect.py -v
-      - name: Qualify owned allocation with the real signed candidate
+          SOURCE: ${{ inputs.source || github.sha }}
+        run: |
+          python scripts/conda_release.py build --candidate "$RUNNER_TEMP/candidate" \
+            --output "$RUNNER_TEMP/conda-release" --prefix "$RUNNER_TEMP/conda-qualified" --source "$SOURCE"
+      - name: Qualify installed Conda commands with the real signed image
+        shell: bash -l {0}
         env:
-          CODEX_HPC_TEST_CANDIDATE: ${{ runner.temp }}/candidate
-        run: python -m unittest discover -s tests -p test_allocation.py -v
-      - name: Qualify compute launch and actual container isolation
-        env:
-          CODEX_HPC_TEST_CANDIDATE: ${{ runner.temp }}/candidate
-        run: python -m unittest discover -s tests -p test_compute.py -v
-      - name: Qualify shared credentials and actual private auth mounts
-        # Credential tests use only disposable documents, never production login.
-        env:
-          CODEX_HPC_TEST_CANDIDATE: ${{ runner.temp }}/candidate
-        run: python -m unittest discover -s tests -p test_credentials.py -v
-      - name: Qualify forwarded sign-in with disposable login and browser peers
-        env:
-          CODEX_HPC_TEST_CANDIDATE: ${{ runner.temp }}/candidate
-        run: python -m unittest discover -s tests -p test_signin.py -v
-      - name: Qualify upgrades and release lifetime with the real signed candidate
-        env:
-          CODEX_HPC_TEST_CANDIDATE: ${{ runner.temp }}/candidate
-        run: python -m unittest discover -s tests -p test_lifetime.py -v
-      - name: Retain qualified candidate for dependent setup tests
+          SOURCE: ${{ inputs.source || github.sha }}
+        run: |
+          python scripts/conda_release.py qualify --bundle "$RUNNER_TEMP/conda-release" \
+            --prefix "$RUNNER_TEMP/conda-qualified" --source "$SOURCE" --image "$RUNNER_TEMP/selected.sif"
+      - name: Retain the exact qualified Conda release
         uses: actions/upload-artifact@v4
         with:
-          name: qualified-candidate-linux-amd64
-          path: ${{ runner.temp }}/candidate
-          retention-days: 3
+          name: codex-hpc-conda-release
+          path: ${{ runner.temp }}/conda-release
+          retention-days: ${{ inputs.release && 90 || 3 }}
           if-no-files-found: error
       - name: Remove disposable signing key
         if: always()
-        run: rm -rf "$RUNNER_TEMP/signing"
+        run: rm -rf "$RUNNER_TEMP/signing" "$RUNNER_TEMP/fixture-signing"

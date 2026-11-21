@@ -71,7 +71,7 @@ with tempfile.TemporaryDirectory(prefix="image-selection-") as temporary:
     client.write_text(original_client + "\n# Client-only candidate update\n")
     reused = prepare("reused")
     assert read(reused / "release/release.json")["image"] == identity
-    assert read(reused / "release/release.json")["image_source_release"] == "v0.1.0.dev0"
+    assert read(reused / "release/release.json")["image_source_release"] == read(trusted)["image_source_release"]
     assert not (reused / image.name).exists()
     assert read(reused / "selection.json")["actions"] == {
         "build": False, "sign": False, "upload_image": False}

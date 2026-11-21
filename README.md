@@ -6,6 +6,21 @@ See [Contributing](.github/CONTRIBUTING.md) for the protected PR workflow and th
 
 Maintainers can [build and qualify a signed image candidate](docs/build-image.md) with recorded inputs and a matching client/helper package. Candidate creation does not publish a release.
 
+## Installation
+
+Once the first release is published, install from the `micknudsen` Conda channel:
+
+```sh
+conda create -n codex-hpc --override-channels -c micknudsen -c conda-forge codex-hpc
+conda activate codex-hpc
+codex-hpc setup --host my-cluster
+codex-hpc connect '~/projects/example' --host my-cluster
+```
+
+The package bundles its matching helper, image metadata and public key, and
+depends on OpenSSH. The signed SIF is downloaded on the login host from GitHub
+Releases. See [Releasing](docs/releasing.md) for qualification and publication.
+
 ## Development client
 
 A candidate client wheel bundles its matching helper, image metadata and trust key.
@@ -206,7 +221,7 @@ Actual OAuth and site SSH forwarding are still part of real-cluster qualificatio
 
 ## Remote setup
 
-Install a qualified candidate wheel, then run `codex-hpc setup --host my-cluster`.
+Install a released Conda package, then run `codex-hpc setup --host my-cluster`.
 Setup downloads a missing image directly on the login host from its bundled
 original GitHub Release URL. The cache uses architecture and the SHA-256 of the
 signed bytes, so newer clients can share an older image without downloading it

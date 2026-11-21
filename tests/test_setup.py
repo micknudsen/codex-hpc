@@ -58,10 +58,19 @@ class RemoteCLI(unittest.TestCase):
                             "--no-build-isolation", "--wheel-dir", str(root / "wheels"),
                             str(source)], check=True, stdout=subprocess.DEVNULL)
             wheel = next((root / "wheels").glob("*.whl"))
-        venv.create(root / "venv", with_pip=True)
+        conda_prefix = os.environ.get("CODEX_HPC_TEST_PREFIX")
+        if conda_prefix:
+            # Tests intentionally mutate their release bundle. Copy rather than hardlink
+            # so neither the qualified installation nor Conda's package cache changes.
+            subprocess.run([os.environ.get("CODEX_HPC_TEST_CONDA", "conda"), "create", "-y",
+                            "--offline", "--copy", "--clone", conda_prefix,
+                            "-p", str(root / "venv")], check=True, stdout=subprocess.DEVNULL)
+        else:
+            venv.create(root / "venv", with_pip=True)
         cls.python = root / "venv/bin/python"
-        subprocess.run([str(cls.python), "-m", "pip", "install", "--no-index", "--no-deps",
-                        str(wheel)], check=True, stdout=subprocess.DEVNULL)
+        if not conda_prefix:
+            subprocess.run([str(cls.python), "-m", "pip", "install", "--no-index", "--no-deps",
+                            str(wheel)], check=True, stdout=subprocess.DEVNULL)
         cls.cli = root / "venv/bin/codex-hpc"
         cls.bundle = Path(subprocess.check_output([str(cls.python), "-c",
             "from importlib.resources import files; print(files('codex_hpc').joinpath('release'))"],
