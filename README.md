@@ -8,7 +8,7 @@ Maintainers can [build and qualify a signed image candidate](docs/build-image.md
 
 ## Installation
 
-Once the first release is published, install from the `micknudsen` Conda channel:
+Install from the `micknudsen` Conda channel:
 
 ```sh
 conda create -n codex-hpc --override-channels -c micknudsen -c conda-forge codex-hpc
@@ -20,6 +20,10 @@ codex-hpc connect '~/projects/example' --host my-cluster
 The package bundles its matching helper, image metadata and public key, and
 depends on OpenSSH. The signed SIF is downloaded on the login host from GitHub
 Releases. See [Releasing](docs/releasing.md) for qualification and publication.
+
+[v0.1.0 real-cluster qualification](docs/qualification/v0.1.0-2026-11-21.md)
+records the tested artifacts, runtime versions, isolation, resource limits,
+sign-in and cleanup results on a representative Slurm/Apptainer cluster.
 
 ## Development client
 
@@ -217,7 +221,8 @@ forwards the callback port from the emitted sign-in URL; a newly busy local port
 after queueing stops startup and releases the owned job. This follows the pinned
 [login commands](https://github.com/openai/codex/blob/rust-v0.170.0/codex-rs/cli/src/main.rs)
 and [callback server](https://github.com/openai/codex/blob/rust-v0.170.0/codex-rs/login/src/server.rs).
-Actual OAuth and site SSH forwarding are still part of real-cluster qualification.
+The [real-cluster report](docs/qualification/v0.1.0-2026-11-21.md) records the
+genuine browser sign-in and site SSH forwarding observed for v0.1.0.
 
 ## Remote setup
 

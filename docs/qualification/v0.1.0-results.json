@@ -1,0 +1,146 @@
+{
+  "result-first.json": {
+    "mode": "first",
+    "cwd_matches_workspace": true,
+    "private_home": true,
+    "platform": "Linux x86_64",
+    "python": "3.11.2",
+    "cpus_allowed": [
+      88,
+      89
+    ],
+    "sentinels_inaccessible": [
+      true,
+      true,
+      true
+    ],
+    "workspace_marker_before": false,
+    "home_marker_before": false,
+    "workspace_marker_after": true,
+    "home_marker_after": true,
+    "cgroup_limits": [
+      {
+        "file": "memory.max",
+        "value": "max"
+      },
+      {
+        "file": "cpuset.cpus.effective",
+        "value": "88-89"
+      },
+      {
+        "file": "cpuset.cpus",
+        "value": ""
+      },
+      {
+        "file": "cpu.max",
+        "value": "max 100000"
+      },
+      {
+        "file": "cpuset.cpus.effective",
+        "value": "0-191"
+      }
+    ],
+    "codex_version": "codex-cli 0.170.0",
+    "home_mount_present": true,
+    "workspace_mount_present": true
+  },
+  "result-second.json": {
+    "mode": "second",
+    "cwd_matches_workspace": true,
+    "private_home": true,
+    "platform": "Linux x86_64",
+    "python": "3.11.2",
+    "cpus_allowed": [
+      88,
+      89
+    ],
+    "sentinels_inaccessible": [
+      true,
+      true,
+      true
+    ],
+    "workspace_marker_before": true,
+    "home_marker_before": false,
+    "workspace_marker_after": true,
+    "home_marker_after": false,
+    "cgroup_limits": [
+      {
+        "file": "memory.max",
+        "value": "max"
+      },
+      {
+        "file": "cpuset.cpus.effective",
+        "value": "88-89"
+      },
+      {
+        "file": "cpuset.cpus",
+        "value": ""
+      },
+      {
+        "file": "cpu.max",
+        "value": "max 100000"
+      },
+      {
+        "file": "cpuset.cpus.effective",
+        "value": "0-191"
+      }
+    ],
+    "codex_version": "codex-cli 0.170.0",
+    "home_mount_present": true,
+    "workspace_mount_present": true
+  },
+  "resource-result.json": {
+    "cpu_affinity_count": 2,
+    "ancestor_limits": [
+      {
+        "ancestor_depth": 0,
+        "memory.max": "max",
+        "memory.high": "max",
+        "cpuset.cpus.effective": "88-89"
+      },
+      {
+        "ancestor_depth": 1,
+        "memory.max": "4294967296",
+        "memory.high": "4294967296",
+        "cpuset.cpus.effective": "88-89"
+      },
+      {
+        "ancestor_depth": 2,
+        "memory.max": "max",
+        "memory.high": "max",
+        "cpuset.cpus.effective": "88-89"
+      },
+      {
+        "ancestor_depth": 3,
+        "memory.max": "4294967296",
+        "memory.high": "4294967296",
+        "cpuset.cpus.effective": "88-89"
+      },
+      {
+        "ancestor_depth": 4,
+        "memory.max": "max",
+        "memory.high": "max",
+        "cpuset.cpus.effective": "0-191"
+      },
+      {
+        "ancestor_depth": 5,
+        "memory.max": "max",
+        "memory.high": "max",
+        "cpuset.cpus.effective": "0-191"
+      },
+      {
+        "ancestor_depth": 6,
+        "cpuset.cpus.effective": "0-191"
+      }
+    ],
+    "effective_memory_limit": 4294967296
+  },
+  "scratch-cleanup-second.json": {
+    "scratch_existed_during_session": true,
+    "scratch_removed_after_exit": true
+  },
+  "probe_sha256": {
+    "qualification_probe.py": "bceb9d93a286fd42fbddf62d8534dcf9a9cd05d2d484339d206339945731a6e3",
+    "resource_probe.py": "8f899cac779dc9b499466afd8907a62efb1d7f8766fb6247483d233f6dcb9886"
+  }
+}
