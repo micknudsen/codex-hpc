@@ -56,7 +56,10 @@ permissions. Existing protected-master checks remain required.
    checked PR and squash merge; never bypass master protection.
 4. Wait for all five checks on the exact merged commit. Check versions with
    `python scripts/release_identity.py version` and record the full source SHA.
-5. Push the matching `v<version>` tag at that commit. `Release qualification`
+5. Before tagging, confirm the required secret names are configured: the upload
+   token always, and the signing key when the image selection requires a build.
+   Report missing prerequisites and preserve preparation without pushing the tag.
+   Push the matching `v<version>` tag at that commit. `Release qualification`
    checks master ancestry and version agreement, then runs the complete suite
    against that exact source with release image trust.
 
@@ -111,7 +114,8 @@ It stages deterministic draft assets and downloads each again for comparison:
 Publication evidence is retained for 90 days. The workflow leaves GitHub as a
 draft. The release skill independently downloads assets, checks their hashes and
 the selected image's signature against the trusted bundle, applies agreed notes
-and publishes. A new SIF's public URL becomes available only then: until that
+and publishes. Mark a normal release as Latest; leave explicit prereleases out
+of Latest. A new SIF's public URL becomes available only then: until that
 handoff completes, the newly uploaded Conda package cannot complete real setup.
 
 After publication, verify size, digest and signature using the exact public image

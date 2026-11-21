@@ -34,7 +34,9 @@ its original URL and signing identity. New images require the release signing
 secret. Never print or retain private keys; inspect secret names, not values.
 
 Deliver preparation through a protected squash PR. Wait for all five required
-checks on the exact merged master commit before tagging it. Verify version/tag
+checks on the exact merged master commit before tagging it. Confirm the upload
+token and any needed new-image signing key are configured before pushing a tag;
+report missing secret names and preserve completed preparation while waiting. Verify version/tag
 agreement and record the commit. Follow tag-triggered `Release qualification` to
 completion. Manual runs and PR disposable images are not publication evidence.
 Record the trusted run ID, immutable bundle artifact ID and package digest.
@@ -49,7 +51,8 @@ resume procedure and retain evidence of partial publication.
 Independently download the draft assets and verify asset set, checksums, selected
 SIF signature, source/tag and channel package against the qualification bundle.
 Reused SIFs stay at their original published URLs. Apply agreed notes and publish
-the verified draft, marking prereleases correctly. Then verify the public image
+the verified draft, marking normal releases Latest and explicit prereleases
+prerelease without Latest. Then verify the public image
 URL embedded in the client, final tag, channel distribution, assets and body.
 
 Synchronize final notes and evidence links through a checked PR; archived notes

@@ -105,20 +105,15 @@ def attach(tag, directory):
         release = draft(tag)
     expected = {path.name for path in directory.iterdir()}
     existing = {item["name"] for item in release["assets"]}
-    if not existing.issubset(expected):
+    if len(existing) != len(release["assets"]) or not existing.issubset(expected):
         raise ValueError("Draft contains unexpected assets; preserve and investigate them")
     with tempfile.TemporaryDirectory(prefix="codex-hpc-draft-check-") as temporary:
         for name in sorted(expected, key=lambda name: name == "SHA256SUMS"):
-            if name in existing:
-                gh("release", "download", tag, "--repo", REPOSITORY, "--pattern", name, "--dir", temporary)
-                if digest(Path(temporary) / name) != digest(directory / name):
-                    raise ValueError("Draft asset bytes differ; refusing replacement: " + name)
-            else:
+            if name not in existing:
                 gh("release", "upload", tag, str(directory / name), "--repo", REPOSITORY)
-                # Verify bytes received even for new uploads.
-                gh("release", "download", tag, "--repo", REPOSITORY, "--pattern", name, "--dir", temporary)
-                if digest(Path(temporary) / name) != digest(directory / name):
-                    raise ValueError("Uploaded draft asset differs: " + name)
+            gh("release", "download", tag, "--repo", REPOSITORY, "--pattern", name, "--dir", temporary)
+            if digest(Path(temporary) / name) != digest(directory / name):
+                raise ValueError("Draft asset bytes differ; refusing replacement: " + name)
 
 
 def publish(args):
