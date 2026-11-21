@@ -1,6 +1,4 @@
 """Release trust boundaries, retained bytes and safe publication retries."""
-import copy
-import io
 import json
 from pathlib import Path
 import subprocess
@@ -163,6 +161,45 @@ class RetainedBundle(unittest.TestCase):
 
 
 class PublicationRetries(unittest.TestCase):
+    def test_partial_draft_resume_uploads_only_missing_bytes_and_verifies_all(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            assets = Path(temporary) / 'assets'
+            assets.mkdir()
+            (assets / 'package.conda').write_bytes(b'qualified package')
+            (assets / 'SHA256SUMS').write_bytes(b'qualified checksums')
+            remote = {'package.conda': b'qualified package'}
+            uploads = []
+            downloads = []
+
+            def gh(*args):
+                if args[1] == 'upload':
+                    path = Path(args[3])
+                    uploads.append(path.name)
+                    remote[path.name] = path.read_bytes()
+                else:
+                    self.assertEqual(args[1], 'download')
+                    name = args[args.index('--pattern') + 1]
+                    downloads.append(name)
+                    (Path(args[args.index('--dir') + 1]) / name).write_bytes(remote[name])
+
+            with patch.object(publisher, 'draft', return_value={'assets': [{'name': 'package.conda'}]}), patch.object(publisher, 'gh', side_effect=gh):
+                publisher.attach(TAG, assets)
+            self.assertEqual(uploads, ['SHA256SUMS'])
+            self.assertEqual(set(downloads), {'package.conda', 'SHA256SUMS'})
+
+    def test_conflicting_draft_asset_is_preserved(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            assets = Path(temporary) / 'assets'
+            assets.mkdir()
+            (assets / 'package.conda').write_bytes(b'qualified package')
+
+            def gh(*args):
+                self.assertEqual(args[1], 'download')
+                (Path(args[args.index('--dir') + 1]) / 'package.conda').write_bytes(b'conflicting package')
+
+            with patch.object(publisher, 'draft', return_value={'assets': [{'name': 'package.conda'}]}), patch.object(publisher, 'gh', side_effect=gh), self.assertRaises(ValueError):
+                publisher.attach(TAG, assets)
+
     def test_only_confirmed_channel_404_is_absence(self):
         package = dict(version='0.1.0', fn='codex-hpc-0.1.0-py_0.conda')
         for status in (404, 401, 403, 500):
