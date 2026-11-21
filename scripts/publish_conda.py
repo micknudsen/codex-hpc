@@ -81,10 +81,24 @@ def draft(tag):
     result = subprocess.run(["gh", "api", f"repos/{REPOSITORY}/releases/tags/{tag}"],
                             capture_output=True, text=True)
     if result.returncode:
-        if "HTTP 404" in result.stderr:
+        if "HTTP 404" not in result.stderr:
+            raise ValueError("Cannot inspect GitHub release: " + result.stderr)
+        # GitHub's tag endpoint omits unpublished drafts. The authenticated list
+        # includes them; inspect every page before treating a tag as absent.
+        listing = subprocess.run(["gh", "api", "--paginate", "--slurp",
+                                  f"repos/{REPOSITORY}/releases?per_page=100"],
+                                 capture_output=True, text=True)
+        if listing.returncode:
+            raise ValueError("Cannot inspect GitHub release drafts: " + listing.stderr)
+        matches = [item for page in json.loads(listing.stdout) for item in page
+                   if item.get("tag_name") == tag]
+        if len(matches) > 1:
+            raise ValueError("Multiple GitHub releases match the requested tag")
+        if not matches:
             return None
-        raise ValueError("Cannot inspect GitHub release: " + result.stderr)
-    release = json.loads(result.stdout)
+        release = matches[0]
+    else:
+        release = json.loads(result.stdout)
     if not release["draft"] or release["tag_name"] != tag:
         raise ValueError("Only the matching unpublished draft may receive assets")
     if release["prerelease"] != (re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag) is None):
@@ -103,6 +117,8 @@ def attach(tag, directory):
             command.append("--prerelease")
         gh(*command)
         release = draft(tag)
+        if release is None:
+            raise ValueError("Created draft is not visible yet; retry using the same retained artifact")
     expected = {path.name for path in directory.iterdir()}
     existing = {item["name"] for item in release["assets"]}
     if len(existing) != len(release["assets"]) or not existing.issubset(expected):

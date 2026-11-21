@@ -161,6 +161,28 @@ class RetainedBundle(unittest.TestCase):
 
 
 class PublicationRetries(unittest.TestCase):
+    def test_draft_is_found_when_tag_endpoint_omits_unpublished_releases(self):
+        release = dict(id=91, tag_name=TAG, draft=True, prerelease=False, assets=[])
+        responses = [subprocess.CompletedProcess([], 1, '', 'HTTP 404'),
+                     subprocess.CompletedProcess([], 0, json.dumps([[{'tag_name': 'v9.0.0'}], [release]]), '')]
+        with patch.object(publisher.subprocess, 'run', side_effect=responses) as run:
+            self.assertEqual(publisher.draft(TAG), release)
+            self.assertIn('--paginate', run.call_args.args[0])
+            self.assertIn('--slurp', run.call_args.args[0])
+
+    def test_failed_draft_listing_is_not_permission_to_create_a_release(self):
+        responses = [subprocess.CompletedProcess([], 1, '', 'HTTP 404'),
+                     subprocess.CompletedProcess([], 1, '', 'HTTP 403')]
+        with patch.object(publisher.subprocess, 'run', side_effect=responses), self.assertRaises(ValueError):
+            publisher.draft(TAG)
+
+    def test_duplicate_drafts_are_rejected(self):
+        release = dict(id=91, tag_name=TAG, draft=True, prerelease=False, assets=[])
+        responses = [subprocess.CompletedProcess([], 1, '', 'HTTP 404'),
+                     subprocess.CompletedProcess([], 0, json.dumps([[release, release]]), '')]
+        with patch.object(publisher.subprocess, 'run', side_effect=responses), self.assertRaises(ValueError):
+            publisher.draft(TAG)
+
     def test_partial_draft_resume_uploads_only_missing_bytes_and_verifies_all(self):
         with tempfile.TemporaryDirectory() as temporary:
             assets = Path(temporary) / 'assets'
