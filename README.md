@@ -272,7 +272,7 @@ through packaged connect: workspace writes persist while sibling, personal and
 credential files stay inaccessible. The probe substitutes a controlled process for
 interactive Codex, whose pinned executable is qualified during image building. These
 do not claim real-cluster or real-SSH qualification. CI runs the same suite
-on Ubuntu 24.04 and macOS with Python 3.9 and 3.14 for PRs and after merge to `master`.
+on Ubuntu 24.04 and macOS with Python 3.9 through 3.14 for PRs and after merge to `master`.
 
 Credential scenarios exercise first login, cached reuse with a busy callback port,
 separate roots, shared aliases, overlapping refresh and stale-close ordering,
