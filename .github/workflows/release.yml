@@ -23,7 +23,7 @@ jobs:
       run_id: ${{ steps.identity.outputs.run_id }}
       artifact_id: ${{ steps.identity.outputs.artifact_id }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Select successful qualification for the exact tagged source
@@ -54,7 +54,7 @@ jobs:
       SOURCE: ${{ needs.verify.outputs.source }}
       TAG: ${{ needs.verify.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.verify.outputs.source }}
       - uses: actions/download-artifact@v4
@@ -85,7 +85,7 @@ jobs:
         run: |
           python scripts/publish_conda.py --bundle conda-release --source "$SOURCE" --tag "$TAG" \
             --run-id "$RUN_ID" --artifact-id "$ARTIFACT_ID" --output release-evidence
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: codex-hpc-publication-evidence
           path: release-evidence

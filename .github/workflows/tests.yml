@@ -31,7 +31,7 @@ jobs:
         os: [ubuntu-24.04, macos-latest]
         python: ['3.9', '3.14']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.source || github.sha }}
       - uses: actions/setup-python@v5
@@ -46,7 +46,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.source || github.sha }}
       - uses: actions/setup-python@v5
@@ -111,7 +111,7 @@ jobs:
           python scripts/conda_release.py qualify --bundle "$RUNNER_TEMP/conda-release" \
             --prefix "$RUNNER_TEMP/conda-qualified" --source "$SOURCE" --image "$RUNNER_TEMP/selected.sif"
       - name: Retain the exact qualified Conda release
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: codex-hpc-conda-release
           path: ${{ runner.temp }}/conda-release
