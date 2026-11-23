@@ -13,7 +13,7 @@ image metadata and public key. Python >=3.9 and OpenSSH are Conda dependencies.
 The Linux x86-64 SIF remains a GitHub Release asset: setup downloads it directly
 on the login host from the original URL embedded in the package.
 
-Four product jobs retain Linux/macOS and Python 3.9/3.14 coverage. The signed-image
+Twelve product jobs cover Linux/macOS and Python 3.9 through 3.14. The signed-image
 job qualifies new/reused image selection, builds one `.conda` file, installs it
 into a fresh prefix and runs all seven remote command suites against copies of
 that installation with the real SIF. A final compatibility probe runs pinned
