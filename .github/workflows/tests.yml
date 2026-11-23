@@ -111,7 +111,7 @@ jobs:
           python scripts/conda_release.py qualify --bundle "$RUNNER_TEMP/conda-release" \
             --prefix "$RUNNER_TEMP/conda-qualified" --source "$SOURCE" --image "$RUNNER_TEMP/selected.sif"
       - name: Retain the exact qualified Conda release
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: codex-hpc-conda-release
           path: ${{ runner.temp }}/conda-release

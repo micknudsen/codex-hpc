@@ -85,7 +85,7 @@ jobs:
         run: |
           python scripts/publish_conda.py --bundle conda-release --source "$SOURCE" --tag "$TAG" \
             --run-id "$RUN_ID" --artifact-id "$ARTIFACT_ID" --output release-evidence
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: codex-hpc-publication-evidence
           path: release-evidence
