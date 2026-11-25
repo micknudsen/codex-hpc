@@ -230,6 +230,7 @@ def build(args):
         context = stage / "context"
         context.mkdir()
         fetch_binary(lock["codex"], context / "codex")
+        fetch_binary(lock["code_mode_host"], context / "codex-code-mode-host")
         fetch_binary(lock["ripgrep"], context / "rg")
         shutil.copyfile(REPO / "image/probe.sh", context / "probe.sh")
         definition = (REPO / "image/codex.def").read_text().replace(
@@ -271,7 +272,9 @@ def build(args):
                       "input_fingerprint": provenance["fingerprint"]},
             "trust": {"format": "PEM", "public_key": "trusted.pem",
                       "sha256": digest(public_key)},
-            "executables": {"codex": "/usr/local/bin/codex", "rg": "/usr/local/bin/rg",
+            "executables": {"codex": "/usr/local/bin/codex",
+                            "code_mode_host": "/usr/local/bin/codex-code-mode-host",
+                            "rg": "/usr/local/bin/rg",
                             "git": "/usr/bin/git", "shell": "/bin/bash",
                             "python": "/usr/bin/python3"},
             "tested_capabilities": ["offline-pem-verification", "cleanenv", "containall",
