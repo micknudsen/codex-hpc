@@ -3,11 +3,13 @@ From: {{BASE}}
 
 %files
     codex /usr/local/bin/codex
+    codex-code-mode-host /usr/local/bin/codex-code-mode-host
     rg /usr/local/bin/rg
     probe.sh /usr/local/bin/codex-hpc-probe
 
 %post
     chmod 755 /usr/local/bin/codex /usr/local/bin/rg /usr/local/bin/codex-hpc-probe
+    chmod 755 /usr/local/bin/codex-code-mode-host
     mkdir -p /workspace
 
 %environment
