@@ -159,6 +159,12 @@ access the workspace, helper, image and state directory at their expected shared
 paths. Image/helper bytes are checked before launch. A failure identifies the
 platform, path or capability and triggers owned-job cleanup.
 
+The image includes Bubblewrap (`bwrap`) for the Codex Linux sandbox. The compute
+node must allow Bubblewrap to create user namespaces inside Apptainer.
+
+The image also includes Python 3 with `venv` and pip inside virtual environments,
+the Debian C and C++ toolchain with Make, `jq`, and Node.js 24 LTS with npm and npx.
+
 The step creates a private node-local directory under `/tmp`, independent of a
 shared `TMPDIR`. Its home and scratch expire when the step exits, including Ctrl-C.
 Apptainer disables automatic host filesystem, configured bind, home and current
