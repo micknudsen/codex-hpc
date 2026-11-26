@@ -5,9 +5,22 @@ From: {{BASE}}
     codex /usr/local/bin/codex
     codex-code-mode-host /usr/local/bin/codex-code-mode-host
     rg /usr/local/bin/rg
+    bubblewrap.deb /bubblewrap.deb
+    coding-tools.sources /coding-tools.sources
+    node.tar.xz /node.tar.xz
     probe.sh /usr/local/bin/codex-hpc-probe
 
 %post
+    set -eu
+    dpkg -i /bubblewrap.deb
+    set -- -o Dir::Etc::sourcelist=/coding-tools.sources -o Dir::Etc::sourceparts=-
+    apt-get "$@" -o APT::Update::Error-Mode=any update
+    DEBIAN_FRONTEND=noninteractive apt-get "$@" install -y --no-install-recommends \
+        python3-venv build-essential jq
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+    tar -xJf /node.tar.xz --strip-components=1 --no-same-owner -C /usr/local
+    rm /bubblewrap.deb /coding-tools.sources /node.tar.xz
     chmod 755 /usr/local/bin/codex /usr/local/bin/rg /usr/local/bin/codex-hpc-probe
     chmod 755 /usr/local/bin/codex-code-mode-host
     mkdir -p /workspace

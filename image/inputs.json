@@ -23,6 +23,16 @@
     "sha256": "1c9297be4a084eea7ecaedf93eb03d058d6faae29bbc57ecdaf5063921491599",
     "member": "ripgrep-15.1.0-x86_64-unknown-linux-musl/rg"
   },
+  "bubblewrap": {
+    "version": "0.8.0-2+deb12u1",
+    "url": "https://deb.debian.org/debian/pool/main/b/bubblewrap/bubblewrap_0.8.0-2+deb12u1_amd64.deb",
+    "sha256": "3cc9134a3286ad01a323dcd924ba123eb634cefaeec82d774257e06308aeaadb"
+  },
+  "node": {
+    "version": "24.22.3",
+    "url": "https://nodejs.org/dist/v24.22.3/node-v24.22.3-linux-x64.tar.xz",
+    "sha256": "4f2b175a6d53a5c617a80dba2676238a0688cef28c6da4eba35c7d844e66fcfb"
+  },
   "build_tools": {
     "apptainer": "1.5.5",
     "apptainer_deb_url": "https://github.com/apptainer/apptainer/releases/download/v1.5.5/apptainer_1.5.5_amd64.deb",

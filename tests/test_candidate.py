@@ -15,7 +15,7 @@ import build_candidate
 
 
 class CandidateInputs(unittest.TestCase):
-    def test_build_stages_matching_code_mode_host_beside_codex(self):
+    def test_build_stages_pinned_runtime_dependencies(self):
         lock = build_candidate.inputs()["inputs"]
 
         class ContextChecked(Exception):
@@ -45,6 +45,10 @@ class CandidateInputs(unittest.TestCase):
             self.assertEqual(lock["code_mode_host"]["version"], lock["codex"]["version"])
             self.assertIn("rust-v" + lock["codex"]["version"] + "/",
                           lock["code_mode_host"]["url"])
+            self.assertEqual(files["/bubblewrap.deb"].read_text(), lock["bubblewrap"]["url"])
+            self.assertEqual(files["/node.tar.xz"].read_text(), lock["node"]["url"])
+            self.assertEqual(files["/coding-tools.sources"].read_bytes(),
+                             (REPO / "image/coding-tools.sources").read_bytes())
             raise ContextChecked
 
         with tempfile.TemporaryDirectory() as temporary, \
@@ -52,6 +56,7 @@ class CandidateInputs(unittest.TestCase):
                 mock.patch.object(build_candidate.platform, "machine", return_value="x86_64"), \
                 mock.patch.object(build_candidate.platform, "python_version", return_value=lock["build_tools"]["python"]), \
                 mock.patch.object(build_candidate, "fetch_binary", side_effect=fetch), \
+                mock.patch.object(build_candidate, "fetch_verified", side_effect=fetch), \
                 mock.patch.object(build_candidate, "run", side_effect=run):
             args = SimpleNamespace(version="0.2.0", output=str(Path(temporary) / "candidate"),
                                    private_key="unused-private.pem", public_key="unused-public.pem")
@@ -87,12 +92,13 @@ class CandidateInputs(unittest.TestCase):
                 stream.write("\n# Client-only change\n")
             self.assertEqual(original, fingerprint())
             for relative in ("image/probe.sh", "image/inputs.json", "image/codex.def",
+                             "image/coding-tools.sources",
                              "scripts/build_candidate.py"):
                 path = source / relative
                 before = path.read_bytes()
                 if relative.endswith(".json"):
                     inputs = json.loads(before)
-                    for field in ("base", "codex", "code_mode_host"):
+                    for field in ("base", "codex", "code_mode_host", "bubblewrap", "node"):
                         altered = json.loads(before)
                         altered[field]["sha256"] = "a" * 64
                         path.write_text(json.dumps(altered))

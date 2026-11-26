@@ -48,12 +48,16 @@ def run(*args, cwd=None, env=None):
                           stdout=subprocess.PIPE).stdout.strip()
 
 
+def fetch_verified(spec, target):
+    with urllib.request.urlopen(spec["url"]) as response, target.open("wb") as stream:
+        shutil.copyfileobj(response, stream)
+    if digest(target) != spec["sha256"]:
+        raise ValueError("download checksum mismatch: " + spec["url"])
+
+
 def fetch_binary(spec, target):
     archive = target.with_suffix(".tar.gz")
-    with urllib.request.urlopen(spec["url"]) as response, archive.open("wb") as stream:
-        shutil.copyfileobj(response, stream)
-    if digest(archive) != spec["sha256"]:
-        raise ValueError("download checksum mismatch: " + spec["url"])
+    fetch_verified(spec, archive)
     with tarfile.open(archive) as package:
         member = package.getmember(spec["member"])
         if not member.isfile():
@@ -232,7 +236,10 @@ def build(args):
         fetch_binary(lock["codex"], context / "codex")
         fetch_binary(lock["code_mode_host"], context / "codex-code-mode-host")
         fetch_binary(lock["ripgrep"], context / "rg")
-        shutil.copyfile(REPO / "image/probe.sh", context / "probe.sh")
+        fetch_verified(lock["bubblewrap"], context / "bubblewrap.deb")
+        fetch_verified(lock["node"], context / "node.tar.xz")
+        for name in ("coding-tools.sources", "probe.sh"):
+            shutil.copyfile(REPO / "image" / name, context / name)
         definition = (REPO / "image/codex.def").read_text().replace(
             "{{BASE}}", lock["base"]["name"] + "@sha256:" + lock["base"]["sha256"])
         (context / "codex.def").write_text(definition)
@@ -259,7 +266,11 @@ def build(args):
             if not any(line == rg_version or line.startswith(rg_version + " ")
                        for line in probe.splitlines()):
                 raise ValueError("image ripgrep version differs from pinned input")
-            packages = run(*command, "dpkg-query", "-W", "-f=${Package}=${Version}\n")
+            if "v" + lock["node"]["version"] not in probe.splitlines():
+                raise ValueError("image Node.js version differs from pinned input")
+            packages = run(*command, "dpkg-query", "-W", "-f=${Package}=${Version}\n").splitlines()
+            if "bubblewrap=" + lock["bubblewrap"]["version"] not in packages:
+                raise ValueError("image bubblewrap package version differs from pinned input")
         release = {
             "schema": 1, "candidate": True, "version": args.version,
             "image_source_release": "v" + args.version,
@@ -275,18 +286,23 @@ def build(args):
             "executables": {"codex": "/usr/local/bin/codex",
                             "code_mode_host": "/usr/local/bin/codex-code-mode-host",
                             "rg": "/usr/local/bin/rg",
+                            "bwrap": "/usr/bin/bwrap",
                             "git": "/usr/bin/git", "shell": "/bin/bash",
-                            "python": "/usr/bin/python3"},
+                            "python": "/usr/bin/python3", "jq": "/usr/bin/jq",
+                            "gcc": "/usr/bin/gcc", "g++": "/usr/bin/g++", "make": "/usr/bin/make",
+                            "node": "/usr/local/bin/node", "npm": "/usr/local/bin/npm",
+                            "npx": "/usr/local/bin/npx"},
             "tested_capabilities": ["offline-pem-verification", "cleanenv", "containall",
                                     "no-mount-hostfs-bind-paths", "private-home",
-                                    "codex-version", "runtime-executables"],
+                                    "codex-version", "runtime-executables", "python-venv-with-pip",
+                                    "c-and-cxx-builds-with-make", "npm-run-script", "jq-json"],
             "tested_apptainer": actual["apptainer"],
         }
         package_client(stage, result, release, public_key)
         provenance["signed_image_sha256"] = image_digest
         provenance["build_tools_observed"] = actual
         provenance["build_packages_observed"] = actual_packages
-        provenance["base_package_versions"] = packages.splitlines()
+        provenance["base_package_versions"] = packages
         provenance["qualification_output"] = probe.splitlines()
         write_json(result / "provenance.json", provenance)
         (result / "codex.def").write_text(definition)
