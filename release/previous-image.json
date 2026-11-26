@@ -1,8 +1,8 @@
 {
-  "tag": "v0.1.0",
+  "tag": "v0.1.1",
   "sha256": {
-    "image-release.json": "dbefa9837738a566e09f28ab556b4e601c1f71a9d487b14b25b4013b7740d0db",
+    "image-release.json": "12f780cd215dc73556fa670efb3ec381fbf633c0cfe4708bc2e54e328e681e68",
     "trusted.pem": "0db5f97efe62d13eeaf63af28aeed26a323ca7ba38ca27e8593299fd7922839c",
-    "image-provenance.json": "7f53527a2ae0c076ef86f06be89b00c53eb49caee31a96639e4751a6bb6ef1db"
+    "image-provenance.json": "9b398b85fec120f35453c30f423a6a3e1062e69585f5c145ea5a0571f949a91a"
   }
 }
