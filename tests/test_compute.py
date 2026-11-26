@@ -100,8 +100,13 @@ if sys.argv[-2:] == ["login", "status"]:
     # Compute/credential scenarios control an already authenticated Codex;
     # first-login behavior is exercised separately by test_signin.py.
     raise SystemExit(0)
+args = sys.argv[1:]
+host_home, container_home = args[args.index("--home") + 1].rsplit(":", 1)
+codex_home = next(value.split("=", 1)[1] for value in args if value.startswith("CODEX_HOME="))
+config = Path(host_home) / Path(codex_home).relative_to(container_home) / "config.toml"
 with open(os.environ["COMPUTE_LOG"], "a") as log:
-    log.write(json.dumps({"apptainer": sys.argv[1:], "job": os.environ.get("SLURM_JOB_ID"),
+    log.write(json.dumps({"apptainer": args, "config": config.read_text() if config.exists() else None,
+                         "job": os.environ.get("SLURM_JOB_ID"),
                          "step": os.environ.get("SLURM_STEP_ID"), "pid": os.getpid(),
                          "tty": os.isatty(0),
                          "ambient": [key for key in os.environ if key.startswith(("APPTAINER_BIND", "APPTAINERENV_", "SINGULARITY"))]}) + "\\n")
@@ -154,6 +159,25 @@ class ComputeCLI(ComputeFixture):
         self.assertEqual(json.loads(Path(self.env["JOBS"]).read_text()), {"777": "unrelated-job"})
         self.assertEqual(list(Path(self.env["NODE_TMP"]).iterdir()), [])
 
+    def test_interactive_launch_selects_staged_workspace_profile(self):
+        result = self.connect()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        container = self.compute_events()[-1]
+        self.assertEqual(container["config"], (
+            'default_permissions = "hpc-workspace"\n'
+            '\n'
+            '[permissions.hpc-workspace]\n'
+            'extends = ":workspace"\n'
+            '\n'
+            '[permissions.hpc-workspace.filesystem]\n'
+            '":root" = "deny"\n'
+            '":minimal" = "read"\n'
+        ))
+        args = container["apptainer"]
+        self.assertIn("--underlay", args)
+        self.assertEqual(args[args.index("/usr/local/bin/codex") + 1:],
+                         ['--config=cli_auth_credentials_store="file"'])
+
     def test_node_platform_paths_runtime_and_ssh_failures_release_owned_job(self):
         for settings, expected in (({"NODE_ARCH": "aarch64"}, "Linux aarch64"),
                                    ({"NODE_SYSTEM": "Darwin"}, "Darwin x86_64"),
@@ -186,10 +210,13 @@ class ComputeCLI(ComputeFixture):
         self.assertEqual(container["ambient"], [])
         args = container["apptainer"]
         self.assertEqual(args[args.index("--no-mount") + 1], "hostfs,bind-paths,cwd")
-        fields = next(csv.reader([args[args.index("--mount") + 1]]))
-        self.assertEqual(fields, ["type=bind", "src=" + str(self.workspace.resolve()),
-                                  "dst=" + str(self.workspace.resolve())])
-        self.assertEqual(args.count("--mount"), 1)
+        mounts = [next(csv.reader([args[index + 1]]))
+                  for index, arg in enumerate(args) if arg == "--mount"]
+        self.assertEqual(mounts, [
+            ["type=bind", "src=" + str(self.workspace.resolve()),
+             "dst=" + str(self.workspace.resolve())],
+            ["type=bind", "src=/dev/full", "dst=/dev/full"],
+        ])
         private_home = Path(args[args.index("--home") + 1].split(":")[0])
         self.assertFalse(private_home.exists())
 
