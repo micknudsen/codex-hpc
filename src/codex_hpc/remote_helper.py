@@ -516,10 +516,14 @@ def compute(payload):
     if digest(Path(payload["helper"])) != payload["release"]["helper_sha256"]:
         raise ValueError("compute helper differs from the verified release: " + payload["helper"])
     environment = compute_environment()
-    capabilities = subprocess.run(["apptainer", "exec", "--help"], env=environment,
+    # Apptainer accepts --underlay without listing it among the help options.
+    capabilities = subprocess.run(["apptainer", "exec", "--underlay", "--help"], env=environment,
                                   capture_output=True, text=True)
-    for option in ("--cleanenv", "--containall", "--no-mount", "--home", "--mount", "--pwd", "--env", "--workdir"):
-        if capabilities.returncode or option not in capabilities.stdout:
+    if capabilities.returncode:
+        raise ValueError("compute Apptainer cannot run exec --underlay --help")
+    for option in ("--cleanenv", "--containall", "--no-mount", "--home",
+                   "--mount", "--pwd", "--env", "--workdir"):
+        if option not in capabilities.stdout:
             raise ValueError("compute Apptainer lacks required capability " + option)
     command = ["srun", "--jobid=" + payload["job_id"], *payload["cluster"],
                "--nodes=1", "--ntasks=1", "--nodelist=" + payload["node"],
@@ -672,9 +676,12 @@ def execute(payload):
         environment.update(APPTAINER_CONFIGDIR=str(scratch / "config"),
                            APPTAINER_CACHEDIR=str(scratch / "cache"),
                            APPTAINER_TMPDIR=str(scratch), TMPDIR=str(scratch))
-        command = ["apptainer", "exec", "--cleanenv", "--containall", "--no-mount",
+        # The FUSE overlay can reject nested binds of image paths. Underlay
+        # lets Bubblewrap bind those paths and /dev/full supplies its device tree.
+        command = ["apptainer", "exec", "--cleanenv", "--containall", "--underlay", "--no-mount",
                    "hostfs,bind-paths,cwd", "--home", str(home) + ":" + internal_home,
-                   "--workdir", str(work), "--mount", mount.getvalue(), "--pwd", str(workspace),
+                   "--workdir", str(work), "--mount", mount.getvalue(),
+                   "--mount", "type=bind,src=/dev/full,dst=/dev/full", "--pwd", str(workspace),
                    "--env", "HOME=" + internal_home,
                    "--env", "CODEX_HOME=" + internal_home + "/.codex",
                    *(["--env", "BROWSER=/bin/true"] if payload.get("authenticate") else []),
@@ -687,6 +694,19 @@ def execute(payload):
                 # sets another log location. Browser opening belongs to the client.
                 command.append('--config=log_dir="' + internal_home + '/.codex/log"')
                 return authenticate(command, environment, scratch, payload.get("device_auth", False))
+            # Scoped reads let Bubblewrap mount permitted paths without binding
+            # the entire Apptainer root into Codex's inner sandbox.
+            (codex_home / "config.toml").write_text(
+                'default_permissions = "hpc-workspace"\n'
+                '\n'
+                '[permissions.hpc-workspace]\n'
+                'extends = ":workspace"\n'
+                '\n'
+                '[permissions.hpc-workspace.filesystem]\n'
+                '":root" = "deny"\n'
+                '":minimal" = "read"\n',
+                encoding="utf-8",
+            )
             return subprocess.run(command, env=environment, cwd=scratch).returncode
         finally:
             credentials.persist(auth, initial)
